@@ -1,4 +1,3 @@
-/* Some portions of this code have other licenses, like GEQ 3D. Please review fully. */
 /*
   WS2812FX.cpp contains all effect methods
   Harm Aldick - 2016
@@ -37,6 +36,9 @@
 
 // WLEDMM replace abs8 by abs, as abs8 does not work for numbers >127
 #define abs8(x) abs(x)
+
+static const char _data_FX_MODE_MULTI_COMET_BASS_AR[] PROGMEM = "♪ Multi Comet Bass@Speed=190,Bass Detection=59,Tail Length=210;!;!";
+static const char _data_FX_MODE_NOISEMETER_OG[] PROGMEM = "♪ Noisemeter OG@Fade Speed=190,Display Width=255;!,!;!;1v;m12=2,si=0";
 
 // effect utility functions
 static uint8_t sin_gap(uint16_t in) {
@@ -9236,4 +9238,8 @@ void WS2812FX::setupEffectData() {
 
 #endif // WLED_DISABLE_2D
 
+  addEffect(FX_MODE_MULTI_COMET_BASS_AR, &mode_multi_comet_bass_ar, _data_FX_MODE_MULTI_COMET_BASS_AR);
+  addEffect(FX_MODE_NOISEMETER_OG, &mode_noisemeter_og, _data_FX_MODE_NOISEMETER_OG);
+
 }
+
