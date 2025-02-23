@@ -339,7 +339,8 @@ bool strip_uses_global_leds(void) __attribute__((pure));  // WLEDMM implemented 
 #define FX_MODE_2DSNOWFALL             197 // WLED-MM Snowfall
 #define FX_MODE_MULTI_COMET_BASS_AR     198 // WLED-SR audioreactive multi-comet bass
 #define FX_MODE_NOISEMETER_OG           199  // Original noisemeter with FFT
-#define MODE_COUNT                     200
+#define FX_MODE_MULTI_COMET_134_AR      200 // WLED-SR audioreactive multi-comet 134 version
+#define MODE_COUNT                     201
 
 typedef enum mapping1D2D {
   M12_Pixels = 0,
@@ -1139,5 +1140,6 @@ extern const char JSON_palette_names[];
 // Add function declaration
 uint16_t mode_multi_comet_bass_ar(void);
 uint16_t mode_noisemeter_og(void);
+uint16_t mode_multi_comet_134(void);
 
 #endif

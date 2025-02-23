@@ -39,6 +39,7 @@
 
 static const char _data_FX_MODE_MULTI_COMET_BASS_AR[] PROGMEM = "♪ Multi Comet Bass@Speed=190,Bass Detection=59,Tail Length=210;!;!";
 static const char _data_FX_MODE_NOISEMETER_OG[] PROGMEM = "♪ Noisemeter OG@Fade Speed=190,Display Width=255;!,!;!;1v;m12=2,si=0";
+static const char _data_FX_MODE_MULTI_COMET_134_AR[] PROGMEM = "Multi Comet 134 AR@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
 
 // effect utility functions
 static uint8_t sin_gap(uint16_t in) {
@@ -9240,6 +9241,7 @@ void WS2812FX::setupEffectData() {
 
   addEffect(FX_MODE_MULTI_COMET_BASS_AR, &mode_multi_comet_bass_ar, _data_FX_MODE_MULTI_COMET_BASS_AR);
   addEffect(FX_MODE_NOISEMETER_OG, &mode_noisemeter_og, _data_FX_MODE_NOISEMETER_OG);
+  addEffect(FX_MODE_MULTI_COMET_134_AR, &mode_multi_comet_134, _data_FX_MODE_MULTI_COMET_134_AR);
 
 }
 
