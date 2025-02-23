@@ -8,11 +8,14 @@
 // Define palette wrap modes if not already defined
 #define PALETTE_SOLID_WRAP   (strip.paletteBlend == 1 || strip.paletteBlend == 3)
 
-#define LOG_INTERVAL 30 // Number of frames between logs (~0.5 seconds at 60fps)
-#define DEBUG_NOISEMETER_OG 1  // Set to 1 to enable debug output
-#define DEBUG_BUFFER_SIZE 512   // Size of debug buffer
-#define MIN_LENGTH 0  // Minimum display length (base noise level)
-#define MAX_LENGTH 5  // Maximum display length
+// Debug settings
+#define LOG_INTERVAL 30        // Number of frames between logs (~0.5 seconds at 60fps)
+#define DEBUG_NOISEMETER_OG 0  // Set to 1 to enable debug output
+#define DEBUG_BUFFER_SIZE 512  // Size of debug buffer
+
+// Effect settings
+#define MIN_LENGTH 0          // Minimum display length (base noise level)
+#define MAX_LENGTH 5          // Maximum display length
 #define VOLUME_HISTORY_SIZE 60  // About 1 second of history at 60fps
 #define BASE_VOLUME_ALPHA 0.05f  // Base volume adaptation rate
 #define COLOR_FADE_RATE 0.15f   // How fast colors blend (higher = faster)
@@ -65,116 +68,75 @@ uint16_t mode_noisemeter_og(void) {
   // Initialize on first call
   static float baseVolume = 0;
   static float smoothedLen = 0;
-  static uint32_t targetColors[MAX_LENGTH];
-  static uint32_t currentColors[MAX_LENGTH];
   
   if (SEGENV.call == 0) {
     SEGMENT.fill(BLACK);
     SEGENV.aux0 = 0;  // Time-based color offset
     baseVolume = std::abs(volumeRaw) * 2.0f;
     smoothedLen = 0;
-    for (int i = 0; i < MAX_LENGTH; i++) {
-      targetColors[i] = BLACK;
-      currentColors[i] = BLACK;
-    }
   }
 
   // Calculate base volume using exponential moving average
-  float adaptRate = map_float(SEGMENT.speed, 0, 255, 0.01f, 0.05f);  // Speed affects adaptation rate
+  float adaptRate = map_float(SEGMENT.speed, 0, 255, 0.01f, 0.05f);
   baseVolume = baseVolume * (1.0f - adaptRate) + volumeRaw * adaptRate;
   *(float*)um_data->u_data[1] = baseVolume;
 
   // Scale volume relative to base with display width influence
   float relativeVolume = baseVolume > 15.0f ? volumeRaw / baseVolume : 0.0f;
-  float widthFactor = map_float(SEGMENT.intensity, 0, 255, 0.5f, 2.0f);  // Display width affects scaling
+  float widthFactor = map_float(SEGMENT.intensity, 0, 255, 0.5f, 2.0f);
   float scaledVolume = powf(relativeVolume * widthFactor, 2.0f);
   
-  // Map to target length with dynamic thresholds based on display width
+  // Map to target length with dynamic thresholds
   uint8_t targetLen = 0;
-  float baseThreshold = map_float(SEGMENT.intensity, 0, 255, 0.15f, 0.05f);  // Lower threshold at higher width
+  float baseThreshold = map_float(SEGMENT.intensity, 0, 255, 0.15f, 0.05f);
   if (scaledVolume > baseThreshold) targetLen = 1;
   if (scaledVolume > baseThreshold * 2.5f) targetLen = 2;
   if (scaledVolume > baseThreshold * 4.5f) targetLen = 3;
   if (scaledVolume > baseThreshold * 7.0f) targetLen = 4;
   if (scaledVolume > baseThreshold * 10.0f) targetLen = 5;
 
-  // Smooth length transitions - speed affects transition rate
+  // Smooth length transitions
   float transitionSpeed = map_float(SEGMENT.speed, 0, 255, 0.15f, 0.4f);
   smoothedLen = smoothedLen + (targetLen - smoothedLen) * transitionSpeed;
   
-  // Convert to integer for display
   int maxLen = static_cast<int>(smoothedLen + 0.5f);
   maxLen = std::max(MIN_LENGTH, std::min(maxLen, MAX_LENGTH));
 
-  // Fade handling - speed affects fade rates
-  uint8_t baseFadeRate = map(SEGMENT.speed, 0, 255, 252, 180);  // Faster fade at lower speeds
-  uint8_t fadeRate = baseFadeRate;
+  // Color movement speed based on speed slider
+  uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, 1, 4);
+  SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 65535;
+  
+  // Generate base color index from time
+  uint8_t baseIndex = inoise8(SEGENV.aux0, SEGENV.aux0 / 2);
+
+  // Apply colors with fade
+  uint8_t fadeRate = map(SEGMENT.speed, 0, 255, 252, 180);
   if (relativeVolume < baseThreshold) {
-    fadeRate = baseFadeRate + 3;  // Quick fade when below threshold
+    fadeRate += 3;  // Quick fade when below threshold
   } else if (maxLen > 1) {
-    fadeRate = baseFadeRate - 40;  // Slower fade for active display
+    fadeRate -= 40;  // Slower fade for active display
   }
 
-  // Generate new target colors with speed-based movement
-  if (maxLen > 0) {
-    // Color movement speed based on speed slider
-    uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, 1, 4);
-    SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 65535;
-    
-    // Generate base color index from time
-    uint8_t baseIndex = inoise8(SEGENV.aux0, SEGENV.aux0 / 2);
-    
-    // Apply color to pixels with width-based variation
-    float colorSpread = map_float(SEGMENT.intensity, 0, 255, 2.0f, 8.0f);
-    for (int i = 0; i < maxLen; i++) {
-      uint8_t index = static_cast<uint8_t>(fmod(baseIndex + i * colorSpread, 256.0f));
-      targetColors[i] = SEGMENT.color_from_palette(
-        index,
-        false,
-        PALETTE_SOLID_WRAP,
-        0
-      );
-    }
-    
-    // Clear remaining pixels
-    for (int i = maxLen; i < MAX_LENGTH; i++) {
-      targetColors[i] = BLACK;
-    }
-  }
-
-  // Interpolate colors with speed-based blend rate
-  float blendRate = map_float(SEGMENT.speed, 0, 255, 0.05f, 0.25f);
-  for (int i = 0; i < MAX_LENGTH; i++) {
-    currentColors[i] = blendColors(
-      currentColors[i],
-      targetColors[i],
-      blendRate
-    );
-  }
-
-  // Apply colors and fade
+  // Apply color to pixels with width-based variation
+  float colorSpread = map_float(SEGMENT.intensity, 0, 255, 2.0f, 8.0f);
   for (int i = 0; i < SEGLEN; i++) {
-    uint8_t fadeAmount = fadeRate;
     if (i < maxLen) {
-      fadeAmount = std::max(20u, fadeAmount - 100u);
-    }
-    
-    // Only apply fade to pixels beyond the current length
-    if (i >= maxLen) {
+      // Active pixels use palette colors
+      uint8_t index = static_cast<uint8_t>(fmod(baseIndex + i * colorSpread, 256.0f));
+      SEGMENT.setPixelColor(i, SEGMENT.color_from_palette(index, false, PALETTE_SOLID_WRAP, 0));
+    } else {
+      // Fade inactive pixels
       uint32_t color = SEGMENT.getPixelColor(i);
       SEGMENT.setPixelColor(i,
-        exponentialFade(R(color), fadeAmount),
-        exponentialFade(G(color), fadeAmount),
-        exponentialFade(B(color), fadeAmount)
+        exponentialFade(R(color), fadeRate),
+        exponentialFade(G(color), fadeRate),
+        exponentialFade(B(color), fadeRate)
       );
-    } else {
-      // For active pixels, use the interpolated colors
-      SEGMENT.setPixelColor(i, currentColors[i]);
     }
   }
 
   // Debug output
-  if (DEBUG_NOISEMETER_OG && (SEGENV.call % 15 == 0)) {
+  if (DEBUG_NOISEMETER_OG && (SEGENV.call % LOG_INTERVAL == 0)) {
     Serial.printf("NOISE-OG: Vol[raw=%d base=%.2f rel=%.2f scaled=%.2f] Len[%d/5] Fade[%d]\n",
       volumeRaw, baseVolume, relativeVolume, scaledVolume, maxLen, fadeRate);
   }
