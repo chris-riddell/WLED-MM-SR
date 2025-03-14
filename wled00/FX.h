@@ -340,7 +340,15 @@ bool strip_uses_global_leds(void) __attribute__((pure));  // WLEDMM implemented 
 #define FX_MODE_MULTI_COMET_BASS_AR     198 // WLED-SR audioreactive multi-comet bass
 #define FX_MODE_NOISEMETER_OG           199  // Original noisemeter with FFT
 #define FX_MODE_MULTI_COMET_134_AR      200 // WLED-SR audioreactive multi-comet 134 version
-#define MODE_COUNT                     201
+#define FX_MODE_FFT_SPECTRUM_AR          201 // WLED-SR audioreactive FFT spectrum
+#define FX_MODE_VOLUME_RIPPLES           202 // WLED-SR audioreactive volume ripples
+#define FX_MODE_DYNAMIC_RANGE            203 // WLED-SR audioreactive dynamic range
+#define FX_MODE_NOTE_TRACKER             204 // WLED-SR audioreactive note tracker
+#define FX_MODE_HARMONIC_VIZ             205 // WLED-SR audioreactive harmonic viz
+#define FX_MODE_SPECTRAL_CENTROID        206 // WLED-SR audioreactive spectral centroid
+#define FX_MODE_SPECTRAL_FLUX            207 // WLED-SR audioreactive spectral flux
+
+#define MODE_COUNT                       208
 
 typedef enum mapping1D2D {
   M12_Pixels = 0,
@@ -1141,5 +1149,16 @@ extern const char JSON_palette_names[];
 uint16_t mode_multi_comet_bass_ar(void);
 uint16_t mode_noisemeter_og(void);
 uint16_t mode_multi_comet_134(void);
+uint16_t mode_fft_spectrum_ar(void);
+
+// Audio reactive effects
+uint16_t mode_volume_ripples(void);
+uint16_t mode_dynamic_range(void);
+uint16_t mode_note_tracker(void);
+uint16_t mode_harmonic_viz(void);
+uint16_t mode_spectral_centroid(void);
+uint16_t mode_spectral_flux(void);
+uint16_t mode_bass_drop(void);
+uint16_t mode_fft_spectrum(void);
 
 #endif

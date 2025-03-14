@@ -28,7 +28,7 @@ uint16_t mode_multi_comet_134(void)
   if (SEGENV.step == it) return FRAMETIME;
   uint16_t armed = SEGENV.aux0;   // WLEDSR allows to delay comet launch
   bool shotOne = false;           // WLEDSR avoids starting several comets at the same time (invisible due to overlap)
-  SEGMENT.fade_out(SEGMENT.intensity);
+  SEGMENT.fadeToBlackBy(SEGMENT.intensity);
 
   // Get audio data
   um_data_t *um_data;

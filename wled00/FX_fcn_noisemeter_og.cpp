@@ -10,7 +10,7 @@
 
 // Debug settings
 #define LOG_INTERVAL 30        // Number of frames between logs (~0.5 seconds at 60fps)
-#define DEBUG_NOISEMETER_OG 0  // Set to 1 to enable debug output
+#define DEBUG_NOISEMETER_OG 1  // Set to 1 to enable debug output
 #define DEBUG_BUFFER_SIZE 512  // Size of debug buffer
 
 // Effect settings
@@ -68,36 +68,98 @@ uint16_t mode_noisemeter_og(void) {
   // Initialize on first call
   static float baseVolume = 0;
   static float smoothedLen = 0;
+  static float smoothedVol = 0; // Add smoothing for raw volume
+  static float lastScaledVol = 0; // Track last scaled volume for additional smoothing
   
   if (SEGENV.call == 0) {
     SEGMENT.fill(BLACK);
     SEGENV.aux0 = 0;  // Time-based color offset
-    baseVolume = std::abs(volumeRaw) * 2.0f;
+    baseVolume = std::max(60.0f, static_cast<float>(std::abs(volumeRaw)) * 1.5f);  // Increased from 40.0f to 60.0f
     smoothedLen = 0;
+    smoothedVol = 0;
+    lastScaledVol = 0;
   }
 
-  // Calculate base volume using exponential moving average
-  float adaptRate = map_float(SEGMENT.speed, 0, 255, 0.01f, 0.05f);
-  baseVolume = baseVolume * (1.0f - adaptRate) + volumeRaw * adaptRate;
+  // Clamp raw volume to prevent extreme values
+  int16_t clampedVolumeRaw = std::max(static_cast<int16_t>(0), std::min(volumeRaw, static_cast<int16_t>(255)));
+  
+  // Smooth the raw volume first to reduce jitter
+  float volSmoothing = 0.6f;
+  smoothedVol = (smoothedVol * volSmoothing) + (std::abs(clampedVolumeRaw) * (1.0f - volSmoothing));
+
+  // Calculate base volume using exponential moving average - slower adaptation
+  float adaptRateUp = map_float(SEGMENT.speed, 0, 255, 0.001f, 0.01f);
+  float adaptRateDown = map_float(SEGMENT.speed, 0, 255, 0.005f, 0.02f);
+  float adaptRate = (smoothedVol > baseVolume) ? adaptRateUp : adaptRateDown;
+  
+  baseVolume = baseVolume * (1.0f - adaptRate) + smoothedVol * adaptRate;
+  baseVolume = std::max(baseVolume, 60.0f);  // Increased from 40.0f to 60.0f
+  
   *(float*)um_data->u_data[1] = baseVolume;
 
   // Scale volume relative to base with display width influence
-  float relativeVolume = baseVolume > 15.0f ? volumeRaw / baseVolume : 0.0f;
-  float widthFactor = map_float(SEGMENT.intensity, 0, 255, 0.5f, 2.0f);
-  float scaledVolume = powf(relativeVolume * widthFactor, 2.0f);
+  float relativeVolume = smoothedVol / baseVolume;
   
-  // Map to target length with dynamic thresholds
+  // Cap relative volume to prevent excessive scaling
+  relativeVolume = std::min(relativeVolume, 2.5f);  // Reduced from 3.0f to 2.5f
+  
+  float widthFactor = map_float(SEGMENT.intensity, 0, 255, 0.3f, 1.0f);  // Reduced upper range from 1.2f to 1.0f
+  
+  // Use a gentler power function
+  float scaledVolume = powf(relativeVolume * widthFactor, 1.5f);  // Reduced from 1.8f to 1.5f
+  
+  // Additional smoothing on scaled volume to prevent jumps
+  float scaleSmoothing = 0.4f;
+  scaledVolume = (lastScaledVol * scaleSmoothing) + (scaledVolume * (1.0f - scaleSmoothing));
+  lastScaledVol = scaledVolume;
+  
+  // Map to target length with more evenly distributed thresholds
   uint8_t targetLen = 0;
-  float baseThreshold = map_float(SEGMENT.intensity, 0, 255, 0.15f, 0.05f);
-  if (scaledVolume > baseThreshold) targetLen = 1;
-  if (scaledVolume > baseThreshold * 2.5f) targetLen = 2;
-  if (scaledVolume > baseThreshold * 4.5f) targetLen = 3;
-  if (scaledVolume > baseThreshold * 7.0f) targetLen = 4;
-  if (scaledVolume > baseThreshold * 10.0f) targetLen = 5;
+  
+  // Check for objectively loud volumes (absolute threshold)
+  const float absoluteThreshold = 160.0f;  // Reduced from 180.0f to 160.0f for better absolute detection
+  boolean isObjLoud = smoothedVol > absoluteThreshold;
+  
+  if (isObjLoud) {
+    // If objectively loud, go straight to 5/5 LEDs
+    targetLen = 5;
+  } else {
+    // Less sensitive thresholds, except for beat detection
+    if (scaledVolume > 0.6f) targetLen = 1;  // Higher threshold for first LED (less background noise)
+    if (scaledVolume > 1.1f) targetLen = 2;
+    if (scaledVolume > 1.8f) targetLen = 3;
+    if (scaledVolume > 2.6f) targetLen = 4;  // Slightly lowered from 2.8f to 2.6f
+    if (scaledVolume > 3.5f) targetLen = 5;  // Lowered from 4.0f to 3.5f for better beat detection
+  }
 
-  // Smooth length transitions
-  float transitionSpeed = map_float(SEGMENT.speed, 0, 255, 0.15f, 0.4f);
-  smoothedLen = smoothedLen + (targetLen - smoothedLen) * transitionSpeed;
+  // Add beat detection based on sudden volume change
+  static float prevVolume = 0;
+  float volumeChange = smoothedVol - prevVolume;
+  prevVolume = smoothedVol;
+  
+  // If we detect a significant volume spike (beat), boost the level
+  if (volumeChange > 30.0f && smoothedVol > 80.0f) {
+    // Strong beat detected - increase level
+    targetLen = std::max(targetLen, (uint8_t)4);  // At least level 4 for strong beats
+    
+    // If it's a really strong beat, go to level 5
+    if (volumeChange > 60.0f && smoothedVol > 100.0f) {
+      targetLen = 5;
+    }
+  }
+
+  // Faster transitions for better beat response
+  float transitionSpeed = map_float(SEGMENT.speed, 0, 255, 0.3f, 0.6f); // Increased from 0.25f-0.45f to 0.3f-0.6f
+  
+  // Different transition speeds for up vs down
+  if (targetLen > smoothedLen) {
+    // Going up - make it nearly instant
+    // Just jump directly to the target with minimal smoothing
+    smoothedLen = targetLen - 0.01f; // Almost instant (just slightly below target for visual smoothness)
+  } else {
+    // Going down - smooth fade out using the regular transition speed
+    smoothedLen = smoothedLen + (targetLen - smoothedLen) * transitionSpeed;
+  }
   
   int maxLen = static_cast<int>(smoothedLen + 0.5f);
   maxLen = std::max(MIN_LENGTH, std::min(maxLen, MAX_LENGTH));
@@ -109,23 +171,23 @@ uint16_t mode_noisemeter_og(void) {
   // Generate base color index from time
   uint8_t baseIndex = inoise8(SEGENV.aux0, SEGENV.aux0 / 2);
 
-  // Apply colors with fade
-  uint8_t fadeRate = map(SEGMENT.speed, 0, 255, 252, 180);
-  if (relativeVolume < baseThreshold) {
-    fadeRate += 3;  // Quick fade when below threshold
+  // Apply colors with faster fade for inactive pixels
+  uint8_t fadeRate = map(SEGMENT.speed, 0, 255, 240, 180); // Increased lower bound for faster fade at slow speeds
+  if (relativeVolume < 0.2f) {
+    fadeRate += 10;  // Even quicker fade when below threshold
   } else if (maxLen > 1) {
-    fadeRate -= 40;  // Slower fade for active display
+    fadeRate -= 20;  // Reduced fade difference for active display
   }
 
   // Apply color to pixels with width-based variation
   float colorSpread = map_float(SEGMENT.intensity, 0, 255, 2.0f, 8.0f);
   for (int i = 0; i < SEGLEN; i++) {
     if (i < maxLen) {
-      // Active pixels use palette colors
+      // Active pixels use palette colors with full brightness
       uint8_t index = static_cast<uint8_t>(fmod(baseIndex + i * colorSpread, 256.0f));
       SEGMENT.setPixelColor(i, SEGMENT.color_from_palette(index, false, PALETTE_SOLID_WRAP, 0));
     } else {
-      // Fade inactive pixels
+      // Faster fade for inactive pixels
       uint32_t color = SEGMENT.getPixelColor(i);
       SEGMENT.setPixelColor(i,
         exponentialFade(R(color), fadeRate),
@@ -135,10 +197,11 @@ uint16_t mode_noisemeter_og(void) {
     }
   }
 
-  // Debug output
+  // Debug output - add absolute threshold info
   if (DEBUG_NOISEMETER_OG && (SEGENV.call % LOG_INTERVAL == 0)) {
-    Serial.printf("NOISE-OG: Vol[raw=%d base=%.2f rel=%.2f scaled=%.2f] Len[%d/5] Fade[%d]\n",
-      volumeRaw, baseVolume, relativeVolume, scaledVolume, maxLen, fadeRate);
+    Serial.printf("NOISE-OG: Vol[raw=%d smooth=%.2f base=%.2f rel=%.2f scaled=%.2f] AbsLoud[%s] Len[%d/5] Fade[%d]\n",
+      volumeRaw, smoothedVol, baseVolume, relativeVolume, scaledVolume, 
+      isObjLoud ? "YES" : "no", maxLen, fadeRate);
   }
 
   return FRAMETIME;

@@ -37,9 +37,18 @@
 // WLEDMM replace abs8 by abs, as abs8 does not work for numbers >127
 #define abs8(x) abs(x)
 
-static const char _data_FX_MODE_MULTI_COMET_BASS_AR[] PROGMEM = "♪ Multi Comet Bass@Speed=190,Bass Detection=59,Tail Length=210;!;!";
-static const char _data_FX_MODE_NOISEMETER_OG[] PROGMEM = "♪ Noisemeter OG@Fade Speed=190,Display Width=255;!,!;!;1v;m12=2,si=0";
-static const char _data_FX_MODE_MULTI_COMET_134_AR[] PROGMEM = "Multi Comet 134 AR@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+static const char _data_FX_MODE_MULTI_COMET_BASS_AR[] PROGMEM = "♪ Multi Comet Bass AR CE@Speed=190,Bass Detection=59,Tail Length=210;!;!";
+static const char _data_FX_MODE_NOISEMETER_OG[] PROGMEM = "♪ Noisemeter AR CE@Fade Speed=190,Display Width=255;!,!;!;1v;m12=2,si=0";
+static const char _data_FX_MODE_MULTI_COMET_134_AR[] PROGMEM = "♪ Multi Comet 134 AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+static const char _data_FX_MODE_FFT_SPECTRUM_AR[] PROGMEM = "♪ FFT Spectrum AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+
+static const char _data_FX_MODE_VOLUME_RIPPLES[] PROGMEM = "♪ !EXP Volume Ripples AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+static const char _data_FX_MODE_DYNAMIC_RANGE[] PROGMEM = "♪ !EXP Dynamic Range AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+static const char _data_FX_MODE_NOTE_TRACKER[] PROGMEM = "♪ !EXP Note Tracker AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+static const char _data_FX_MODE_HARMONIC_VIZ[] PROGMEM = "♪ !EXP Harmonic Viz AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+static const char _data_FX_MODE_SPECTRAL_CENTROID[] PROGMEM = "♪ !EXP Spectral Centroid AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+static const char _data_FX_MODE_SPECTRAL_FLUX[] PROGMEM = "♪ !EXP Spectral Flux AR CE@Speed,Fade Rate;;;1v;ix=128,m12=7,si=0";
+
 
 // effect utility functions
 static uint8_t sin_gap(uint16_t in) {
@@ -9242,6 +9251,15 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_MULTI_COMET_BASS_AR, &mode_multi_comet_bass_ar, _data_FX_MODE_MULTI_COMET_BASS_AR);
   addEffect(FX_MODE_NOISEMETER_OG, &mode_noisemeter_og, _data_FX_MODE_NOISEMETER_OG);
   addEffect(FX_MODE_MULTI_COMET_134_AR, &mode_multi_comet_134, _data_FX_MODE_MULTI_COMET_134_AR);
+  addEffect(FX_MODE_FFT_SPECTRUM_AR, &mode_fft_spectrum_ar, _data_FX_MODE_FFT_SPECTRUM_AR);
 
+  
+  addEffect(FX_MODE_VOLUME_RIPPLES, &mode_volume_ripples, _data_FX_MODE_VOLUME_RIPPLES);
+  addEffect(FX_MODE_DYNAMIC_RANGE, &mode_dynamic_range, _data_FX_MODE_DYNAMIC_RANGE);
+  addEffect(FX_MODE_NOTE_TRACKER, &mode_note_tracker, _data_FX_MODE_NOTE_TRACKER);
+  addEffect(FX_MODE_HARMONIC_VIZ, &mode_harmonic_viz, _data_FX_MODE_HARMONIC_VIZ);
+  addEffect(FX_MODE_SPECTRAL_CENTROID, &mode_spectral_centroid, _data_FX_MODE_SPECTRAL_CENTROID);
+  addEffect(FX_MODE_SPECTRAL_FLUX, &mode_spectral_flux, _data_FX_MODE_SPECTRAL_FLUX);
 }
+
 
