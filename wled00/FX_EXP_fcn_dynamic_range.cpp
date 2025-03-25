@@ -5,11 +5,19 @@
 #include "const.h"  // for USERMOD_ID_AUDIOREACTIVE
 #include <cmath>
 
-#define HISTORY_SIZE 24  // Frames of volume history to track
-#define MIN_VOLUME_THRESHOLD 20.0f
-#define FLASH_THRESHOLD 0.5f  // Relative threshold for flash effect
+#define HISTORY_SIZE 32  // Increased from 24 for smoother transitions
+#define MIN_VOLUME_THRESHOLD 40.0f
+#define FLASH_THRESHOLD 0.3f  // Reduced from 0.4f for even less jarring flashes
 #define DYNAMIC_RANGE_DEBUG 0
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
+
+// IMPROVED: Better color and flash control
+#define MIN_SATURATION 180        // Much higher minimum saturation to preserve colors
+#define MAX_SATURATION_REDUCTION 30  // Drastically reduced from 50 to maintain colors
+#define MIN_WHITE_THRESHOLD 240   // Higher threshold before any white (reduced white flashing)
+#define COLOR_CHANGE_SPEED_MIN 2
+#define COLOR_CHANGE_SPEED_MAX 8  // Reduced from 12 for smoother transitions
+#define COLOR_DIVERSITY_FACTOR 2.0f
 
 // Forward declaration of helper functions
 extern float map_float(float x, float in_min, float in_max, float out_min, float out_max);
@@ -30,135 +38,157 @@ uint16_t mode_dynamic_range(void) {
   // Get volume data
   float volume = *(float*)um_data->u_data[0];
   
-  // Allocate memory for volume history
-  if (!SEGENV.allocateData(sizeof(float) * HISTORY_SIZE)) {
-    return FRAMETIME; // Failed to allocate memory
+  // Allocate memory for volume history and additional state variables
+  if (!SEGENV.allocateData(sizeof(float) * HISTORY_SIZE + sizeof(float) * 3)) {
+    return FRAMETIME;
   }
   
   float* volumeHistory = reinterpret_cast<float*>(SEGENV.data);
+  float* smoothedVolume = reinterpret_cast<float*>(SEGENV.data + sizeof(float) * HISTORY_SIZE);
+  float* flashIntensity = smoothedVolume + 1;
+  float* smoothedRange = flashIntensity + 1;
   
   // Initialize on first call
   if (SEGENV.call == 0) {
     SEGMENT.fill(BLACK);
-    SEGENV.aux0 = 0;  // Color movement counter
-    
-    // Initialize volume history
+    SEGENV.aux0 = 0;
     for (int i = 0; i < HISTORY_SIZE; i++) {
-      volumeHistory[i] = 0;
+      volumeHistory[i] = volume;
+    }
+    *smoothedVolume = volume;
+    *flashIntensity = 0;
+    *smoothedRange = 0;
+  }
+  
+  // IMPROVED: More gradual response to changes
+  float responsiveness = map_float(SEGMENT.speed, 0, 255, 0.01f, 0.2f); // Reduced max
+  float animationSpeed = map_float(SEGMENT.speed, 0, 255, 0.2f, 1.0f);  // Reduced max
+  uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, COLOR_CHANGE_SPEED_MIN, COLOR_CHANGE_SPEED_MAX);
+  
+  // Intensity controls visualization style and flash sensitivity
+  float calmness = map_float(SEGMENT.intensity, 0, 255, 0.4f, 2.0f);
+  float flashSensitivity = map_float(SEGMENT.intensity, 0, 255, 1.5f, 0.5f);
+  
+  // Update color movement
+  SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 256;
+  
+  // Smooth volume with variable rate
+  float smoothingFactor = 0.6f + (calmness * 0.2f);
+  *smoothedVolume = *smoothedVolume * smoothingFactor + volume * (1.0f - smoothingFactor);
+  
+  // Update history
+  static uint8_t historyIndex = 0;
+  volumeHistory[historyIndex] = *smoothedVolume;
+  historyIndex = (historyIndex + 1) % HISTORY_SIZE;
+  
+  // Calculate volume statistics with weighted recent values
+  float minVolume = volumeHistory[0];
+  float maxVolume = volumeHistory[0];
+  float avgVolume = 0;
+  float recentAvgVolume = 0;
+  float totalWeight = 0;
+  
+  for (int i = 0; i < HISTORY_SIZE; i++) {
+    int idx = (historyIndex - 1 - i + HISTORY_SIZE) % HISTORY_SIZE;
+    float weight = (HISTORY_SIZE - i) / (float)HISTORY_SIZE;
+    float vol = volumeHistory[idx];
+    
+    minVolume = min(minVolume, vol);
+    maxVolume = max(maxVolume, vol);
+    avgVolume += vol * weight;
+    totalWeight += weight;
+    
+    if (i < HISTORY_SIZE / 4) {
+      recentAvgVolume += vol;
     }
   }
   
-  // Speed controls color change rate and effect responsiveness
-  uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, 1, 3);
-  float responsiveness = map_float(SEGMENT.speed, 0, 255, 0.05f, 0.2f);
+  avgVolume /= totalWeight;
+  recentAvgVolume /= (HISTORY_SIZE / 4);
   
-  // Sensitivity affects minimum volume threshold
-  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 80.0f, MIN_VOLUME_THRESHOLD);
-  
-  // Update color movement counter
-  SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 256;
-  
-  // Update volume history
-  static uint8_t historyIndex = 0;
-  volumeHistory[historyIndex] = volume;
-  historyIndex = (historyIndex + 1) % HISTORY_SIZE;
-  
-  // Calculate min, max, and average volume over history
-  float minVolume = 255.0f;
-  float maxVolume = 0.0f;
-  float avgVolume = 0.0f;
-  
-  for (int i = 0; i < HISTORY_SIZE; i++) {
-    minVolume = min(minVolume, volumeHistory[i]);
-    maxVolume = max(maxVolume, volumeHistory[i]);
-    avgVolume += volumeHistory[i];
-  }
-  
-  avgVolume /= HISTORY_SIZE;
-  
-  // Calculate dynamic range and normalize
+  // Calculate and smooth dynamic range
   float dynamicRange = maxVolume - minVolume;
-  float normalizedRange = constrain(dynamicRange / 128.0f, 0.0f, 1.0f);
+  float normalizedRange = constrain(dynamicRange / (maxVolume + 1), 0.0f, 1.0f);
+  *smoothedRange = *smoothedRange * (1.0f - responsiveness) + normalizedRange * responsiveness;
   
-  // Calculate volume relative to its recent history
-  float relativeVolume = 0.0f;
-  if (maxVolume > minVolume) {
-    relativeVolume = (volume - minVolume) / (maxVolume - minVolume);
+  // Detect volume changes for flash effect
+  static float prevVolume = 0;
+  float volumeChange = *smoothedVolume - prevVolume;
+  prevVolume = *smoothedVolume;
+  
+  // IMPROVED: More controlled flash triggering
+  if (volumeChange > FLASH_THRESHOLD * maxVolume * flashSensitivity && 
+      *smoothedVolume > MIN_VOLUME_THRESHOLD) {
+    float newFlash = (volumeChange / maxVolume) * (1.0f / calmness);
+    *flashIntensity = constrain(newFlash, 0.0f, 0.6f); // Reduced max flash intensity
+  } else {
+    *flashIntensity *= 0.85f; // Gentler flash decay
   }
   
-  // Detect sudden volume changes for flash effect
-  static float prevVolume = 0;
-  float volumeChange = volume - prevVolume;
-  bool triggerFlash = (volumeChange > FLASH_THRESHOLD * maxVolume) && (volume > volumeThreshold);
-  
-  // Store current values for next frame
-  prevVolume = volume;
-  
-  // Calculate saturation based on dynamic range
-  uint8_t saturation = 255 * normalizedRange;
-  
-  // Apply base color based on relative volume
+  // Calculate base color parameters
   uint8_t baseHue = SEGENV.aux0;
-  uint8_t baseBrightness = constrain(volume, 0, 255);
+  uint8_t baseSaturation = map(*smoothedRange * 255, 0, 255, MIN_SATURATION, 255);
   
-  // Apply dynamic range visualization
+  // IMPROVED: Much more conservative white blending
+  uint8_t saturationReduction = 0;
+  if (*smoothedVolume > MIN_WHITE_THRESHOLD) {
+    saturationReduction = map_float(*smoothedVolume, MIN_WHITE_THRESHOLD, 255, 0, MAX_SATURATION_REDUCTION);
+    saturationReduction = saturationReduction * saturationReduction / 255; // Non-linear reduction
+  }
+  
+  uint8_t saturation = constrain(baseSaturation - saturationReduction, MIN_SATURATION, 255);
+  
+  // Fill strip with dynamic range visualization
+  int centerIdx = SEGLEN / 2;
+  uint32_t now = millis();
+  
   for (int i = 0; i < SEGLEN; i++) {
-    // Calculate position-based hue offset
-    uint8_t posOffset = (i * 256) / SEGLEN;
-    uint8_t hue = (baseHue + posOffset) % 256;
+    // Calculate position relative to center
+    int distFromCenter = abs(i - centerIdx);
+    if (distFromCenter > SEGLEN/2) distFromCenter = SEGLEN - distFromCenter;
+    float distRatio = (float)distFromCenter / (SEGLEN/2);
     
-    // Apply dynamic range to saturation
-    uint8_t brightness = map(i, 0, SEGLEN - 1, baseBrightness, baseBrightness * normalizedRange);
+    // Calculate dynamic color pattern
+    float angle = (float)i / SEGLEN * TWO_PI;
+    float wave = sin(angle * 3 + now / (1000.0f / (animationSpeed + 0.2f)));
+    float wave2 = cos(angle * 2 + now / (1200.0f / animationSpeed));
+    float combinedWave = (wave + wave2) * 0.5f;
     
-    // Get color from palette with modified parameters
+    // Calculate hue variation based on dynamic range
+    uint8_t hueOffset;
+    if (*smoothedRange < 0.3f) {
+      hueOffset = 64 * distRatio + 20 * combinedWave;
+    } else {
+      hueOffset = (i * 128) / SEGLEN + combinedWave * 30;
+    }
+    
+    uint8_t hue = (baseHue + hueOffset) % 256;
+    
+    // Calculate brightness based on position and range
+    float brightnessFactor = 0.7f + (0.3f * (1.0f - distRatio));
+    brightnessFactor += *flashIntensity * (1.0f - distRatio * 0.7f);
+    brightnessFactor = constrain(brightnessFactor, 0.0f, 1.0f);
+    
+    // Get and modify color
     uint32_t color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
+    uint8_t r = ((color >> 16) & 0xFF) * brightnessFactor;
+    uint8_t g = ((color >> 8) & 0xFF) * brightnessFactor;
+    uint8_t b = (color & 0xFF) * brightnessFactor;
     
-    // Apply saturation adjustment (shift toward white when range is small)
-    uint8_t r = (color >> 16) & 0xFF;
-    uint8_t g = (color >> 8) & 0xFF;
-    uint8_t b = color & 0xFF;
-    
-    // Calculate white amount (inverse of saturation)
-    uint8_t whiteAmount = 255 - saturation;
-    
-    // Blend with white based on saturation
-    r = r + ((255 - r) * whiteAmount) / 255;
-    g = g + ((255 - g) * whiteAmount) / 255;
-    b = b + ((255 - b) * whiteAmount) / 255;
-    
-    // Scale by brightness
-    r = (r * brightness) / 255;
-    g = (g * brightness) / 255;
-    b = (b * brightness) / 255;
+    // Apply very minimal white blending only on extreme volumes
+    if (saturationReduction > 0) {
+      uint8_t whiteBlend = (saturationReduction * brightnessFactor) / 2;
+      r = qadd8(r, whiteBlend);
+      g = qadd8(g, whiteBlend);
+      b = qadd8(b, whiteBlend);
+    }
     
     SEGMENT.setPixelColor(i, r, g, b);
   }
   
-  // Apply flash effect if triggered
-  if (triggerFlash) {
-    // Flash brightness scales with volume change
-    float flashBrightness = min(255.0f, volumeChange * 2.0f);
-    
-    // Create white flash
-    for (int i = 0; i < SEGLEN; i++) {
-      uint32_t color = SEGMENT.getPixelColor(i);
-      uint8_t r = (color >> 16) & 0xFF;
-      uint8_t g = (color >> 8) & 0xFF;
-      uint8_t b = color & 0xFF;
-      
-      // Add flash intensity to each color channel
-      r = min(255, r + (int)flashBrightness);
-      g = min(255, g + (int)flashBrightness);
-      b = min(255, b + (int)flashBrightness);
-      
-      SEGMENT.setPixelColor(i, r, g, b);
-    }
-  }
-  
-  // Debug output
   if (DYNAMIC_RANGE_DEBUG && SEGENV.call % 32 == 0) {
-    Serial.printf("DYNAMIC_RANGE: Vol=%.1f Range=%.1f NormRange=%.2f RelVol=%.2f Sat=%d Flash=%d\n",
-      volume, dynamicRange, normalizedRange, relativeVolume, saturation, triggerFlash ? 1 : 0);
+    Serial.printf("DYN-RANGE: Vol=%.1f Smooth=%.1f Range=%.2f Flash=%.2f Sat=%d\n",
+                 volume, *smoothedVolume, *smoothedRange, *flashIntensity, saturation);
   }
   
   return FRAMETIME;

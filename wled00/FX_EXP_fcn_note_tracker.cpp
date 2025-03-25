@@ -5,20 +5,77 @@
 #include "const.h"  // for USERMOD_ID_AUDIOREACTIVE
 #include "audio_utils.h"
 #include <cmath>
+#include <algorithm>  // for std::min
 
-#define NOTE_PERSISTENCE 10      // How many frames a note persists
-#define NOTE_FADE_RATE 10        // How quickly notes fade
-#define MIN_VOLUME_THRESHOLD 30.0f  // Minimum volume to detect notes
-#define NOTE_TRACKER_DEBUG 0
+#define MAX_NOTES 12  // C, C#, D, D#, E, F, F#, G, G#, A, A#, B
+#define NOTE_HISTORY_SIZE 6  // Reduced from 8 for faster response
+#define MIN_VOLUME_THRESHOLD 25.0f  // Further reduced threshold
+#define NOTE_TRACKER_DEBUG 0  // Setting debug flag to 0
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
 
-// Musical notes
+// Animation constants
+#define MIN_FADE_RATE 0.75f   // Faster fade
+#define MAX_FADE_RATE 0.50f   // Even faster fade at high speeds
+#define MIN_MOVE_SPEED 1      // Minimum movement speed
+#define MAX_MOVE_SPEED 4      // Maximum movement speed
+#define NOTE_DISPLAY_MODE_FIXED 0    // Fixed note positions
+#define NOTE_DISPLAY_MODE_CIRCULAR 1  // Circular/moving notes
+
+// Musical note frequencies (for C4 through B4)
+const float NOTE_FREQUENCIES[] = {
+  261.63f,  // C4
+  277.18f,  // C#4
+  293.66f,  // D4
+  311.13f,  // D#4
+  329.63f,  // E4
+  349.23f,  // F4
+  369.99f,  // F#4
+  392.00f,  // G4
+  415.30f,  // G#4
+  440.00f,  // A4
+  466.16f,  // A#4
+  493.88f   // B4
+};
+
 const char* NOTE_NAMES[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
 // Forward declaration of helper functions
 extern float map_float(float x, float in_min, float in_max, float out_min, float out_max);
 extern bool isAudioDataValid(um_data_t *um_data);
-extern float detectMusicalNote(um_data_t *um_data);
+
+// Data structure to track note activity
+struct NoteActivity {
+  float intensity;      // Current brightness (0.0-1.0)
+  float targetIntensity; // Target brightness for smooth transitions
+  float volume;        // Current volume for this note
+  uint8_t age;        // How many frames this note has been active
+  uint8_t stability;   // How stable the note detection is
+};
+
+// Helper function to find the closest musical note to a frequency
+int findClosestNote(float frequency) {
+  if (frequency <= 0) return -1;
+  
+  // Find which octave we're in
+  float octave = log2f(frequency / NOTE_FREQUENCIES[0]);
+  float baseFreq = frequency / powf(2.0f, floorf(octave));
+  
+  // Find closest note in the scale
+  float minDiff = 1000000;
+  int closestNote = -1;
+  
+  for (int i = 0; i < MAX_NOTES; i++) {
+    float diff = fabsf(baseFreq - NOTE_FREQUENCIES[i]);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closestNote = i;
+    }
+  }
+  
+  // More lenient threshold for note detection
+  if (minDiff > 25.0f) return -1;  // Increased from 20.0f
+  return closestNote;
+}
 
 uint16_t mode_note_tracker(void) {
   // Get audio data
@@ -32,94 +89,202 @@ uint16_t mode_note_tracker(void) {
     return FRAMETIME;
   }
   
-  // Get volume data
+  // Get volume and frequency data
   float volume = *(float*)um_data->u_data[0];
+  float frequency = *(float*)um_data->u_data[8];  // Use FFT_MajorPeak for better accuracy
   
-  // Structure to hold note activity
-  struct NoteActivity {
-    uint8_t intensity;    // Current brightness of note
-    uint8_t persistTimer; // How many frames left before note starts fading
-  };
-  
-  // Allocate memory for note activity (12 notes)
-  if (!SEGENV.allocateData(sizeof(NoteActivity) * 12)) {
-    return FRAMETIME; // Failed to allocate memory
+  // Allocate memory for note activity and history
+  if (!SEGENV.allocateData(sizeof(NoteActivity) * MAX_NOTES + sizeof(int) * NOTE_HISTORY_SIZE)) {
+    return FRAMETIME;
   }
   
   NoteActivity* noteActivity = reinterpret_cast<NoteActivity*>(SEGENV.data);
+  int* noteHistory = reinterpret_cast<int*>(SEGENV.data + sizeof(NoteActivity) * MAX_NOTES);
   
   // Initialize on first call
   if (SEGENV.call == 0) {
     SEGMENT.fill(BLACK);
+    SEGENV.aux0 = 0;  // Position for circular mode
+    SEGENV.aux1 = NOTE_DISPLAY_MODE_FIXED;  // Default to fixed mode
     
     // Initialize note activity
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < MAX_NOTES; i++) {
       noteActivity[i].intensity = 0;
-      noteActivity[i].persistTimer = 0;
+      noteActivity[i].targetIntensity = 0;
+      noteActivity[i].volume = 0;
+      noteActivity[i].age = 0;
+      noteActivity[i].stability = 0;
+    }
+    
+    // Initialize note history
+    for (int i = 0; i < NOTE_HISTORY_SIZE; i++) {
+      noteHistory[i] = -1;
     }
   }
   
-  // Speed controls flow speed and fade rate
-  uint8_t flowSpeed = map(SEGMENT.speed, 0, 255, 1, 5);
-  uint8_t fadeRate = map(SEGMENT.speed, 0, 255, 5, 20);
+  // Map controls with improved ranges
+  float fadeRate = map_float(SEGMENT.speed, 0, 255, MIN_FADE_RATE, MAX_FADE_RATE);
+  uint8_t moveSpeed = map(SEGMENT.speed, 0, 255, MIN_MOVE_SPEED, MAX_MOVE_SPEED);
+  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 1.0f, 4.0f);  // Increased range
+  float minVolume = map_float(SEGMENT.custom1, 0, 255, 15.0f, 80.0f);  // Lower range
   
-  // Sensitivity affects minimum volume threshold
-  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 80.0f, MIN_VOLUME_THRESHOLD);
+  // Set display mode based on custom2
+  SEGENV.aux1 = (SEGMENT.custom2 < 128) ? NOTE_DISPLAY_MODE_FIXED : NOTE_DISPLAY_MODE_CIRCULAR;
   
-  // Detect current note (if volume is sufficient)
-  int currentNote = -1;
-  if (volume > volumeThreshold) {
-    currentNote = detectMusicalNote(um_data);
+  // Update position for circular mode (much slower movement)
+  if (SEGENV.aux1 == NOTE_DISPLAY_MODE_CIRCULAR && SEGENV.call % 4 == 0) {
+    SEGENV.aux0 = (SEGENV.aux0 + moveSpeed) % SEGLEN;
   }
   
-  // Update note activity
-  for (int i = 0; i < 12; i++) {
-    // Activate note if it matches current note
-    if (currentNote == i) {
-      // Set intensity based on volume
-      noteActivity[i].intensity = constrain(volume, 0, 255);
-      noteActivity[i].persistTimer = NOTE_PERSISTENCE;
-    } 
-    // Update existing notes
-    else {
-      // If timer is still running, maintain intensity
-      if (noteActivity[i].persistTimer > 0) {
-        noteActivity[i].persistTimer--;
-      } 
-      // Otherwise fade out
-      else if (noteActivity[i].intensity > 0) {
-        noteActivity[i].intensity = max(0, noteActivity[i].intensity - fadeRate);
+  // Detect current note with volume-based sensitivity
+  int currentNote = -1;
+  if (volume >= minVolume) {
+    currentNote = findClosestNote(frequency);
+  }
+  
+  // Update note history
+  static uint8_t historyIndex = 0;
+  noteHistory[historyIndex] = currentNote;
+  historyIndex = (historyIndex + 1) % NOTE_HISTORY_SIZE;
+  
+  // Count occurrences of each note in history for stability
+  int noteCounts[MAX_NOTES] = {0};
+  int maxCount = 0;
+  int dominantNote = -1;
+  
+  for (int i = 0; i < NOTE_HISTORY_SIZE; i++) {
+    if (noteHistory[i] >= 0) {
+      noteCounts[noteHistory[i]]++;
+      if (noteCounts[noteHistory[i]] > maxCount) {
+        maxCount = noteCounts[noteHistory[i]];
+        dominantNote = noteHistory[i];
       }
     }
   }
   
-  // Now visualize the notes
-  for (int i = 0; i < SEGLEN; i++) {
-    // Calculate which note corresponds to this LED
-    int noteIndex = (i * 12) / SEGLEN;
-    
-    // Get note intensity and color
-    uint8_t intensity = noteActivity[noteIndex].intensity;
-    
-    // Map note index to a specific color in palette (spread evenly)
-    uint8_t colorIndex = (noteIndex * 256) / 12;
-    uint32_t color = SEGMENT.color_from_palette(colorIndex, false, PALETTE_SOLID_WRAP, 0);
-    
-    // Apply intensity to color
-    uint8_t r = ((color >> 16) & 0xFF) * intensity / 255;
-    uint8_t g = ((color >> 8) & 0xFF) * intensity / 255;
-    uint8_t b = (color & 0xFF) * intensity / 255;
-    
-    // Add flowing effect
-    uint8_t pos = (i + (millis() / (50 - flowSpeed * 2))) % SEGLEN;
-    
-    SEGMENT.setPixelColor(pos, r, g, b);
+  // Reduced stability requirement based on sensitivity
+  int requiredCount = (sensitivity > 2.0f) ? 2 : 3;  // More sensitive = fewer matches needed
+  if (maxCount < requiredCount) dominantNote = -1;
+  
+  // Update note activity with improved response
+  for (int i = 0; i < MAX_NOTES; i++) {
+    if (i == dominantNote) {
+      // Active note - increase intensity based on volume with more aggressive scaling
+      float volumeRatio = (volume - minVolume) / (255.0f - minVolume);
+      volumeRatio = constrain(volumeRatio * sensitivity * 1.5f, 0.0f, 1.0f);  // More aggressive scaling
+      
+      noteActivity[i].targetIntensity = 0.4f + (volumeRatio * 0.6f);  // Higher minimum intensity
+      noteActivity[i].volume = volume;
+      noteActivity[i].age++;
+      
+      // Faster attack for more responsiveness
+      float attack = (noteActivity[i].age < 3) ? 0.5f : 0.3f;  // Increased attack rates
+      noteActivity[i].intensity += (noteActivity[i].targetIntensity - noteActivity[i].intensity) * attack;
+    } else {
+      // Inactive note - fade out
+      noteActivity[i].targetIntensity = 0;
+      noteActivity[i].intensity *= fadeRate;
+      noteActivity[i].age = 0;
+      
+      // Clear very dim notes
+      if (noteActivity[i].intensity < 0.01f) {
+        noteActivity[i].intensity = 0;
+        noteActivity[i].volume = 0;
+      }
+    }
   }
   
-  // Debug output
+  // Clear the segment
+  SEGMENT.fill(BLACK);
+  
+  // Render notes based on display mode
+  if (SEGENV.aux1 == NOTE_DISPLAY_MODE_FIXED) {
+    // Fixed mode - each note has its own section
+    int noteSectionWidth = SEGLEN / MAX_NOTES;
+    
+    for (int note = 0; note < MAX_NOTES; note++) {
+      if (noteActivity[note].intensity > 0) {
+        // Calculate section boundaries
+        int noteStart = note * noteSectionWidth;
+        int noteCenter = noteStart + (noteSectionWidth / 2);
+        int noteEnd = noteStart + noteSectionWidth - 1;
+        
+        // Get color for this note
+        uint8_t colorIndex = (note * 21) % 256;  // Good color separation
+        uint32_t noteColor = SEGMENT.color_from_palette(colorIndex, false, PALETTE_SOLID_WRAP, 0);
+        
+        // Draw note with intensity gradient
+        for (int pos = noteStart; pos <= noteEnd; pos++) {
+          // Calculate distance from center
+          float distRatio = fabsf(pos - noteCenter) / (noteSectionWidth / 2.0f);
+          distRatio = constrain(distRatio, 0.0f, 1.0f);
+          
+          // Apply bell curve falloff
+          float falloff = exp(-3.0f * distRatio * distRatio);
+          
+          // Calculate final brightness
+          float brightness = noteActivity[note].intensity * falloff;
+          
+          // Apply color with brightness
+          uint8_t r = ((noteColor >> 16) & 0xFF) * brightness;
+          uint8_t g = ((noteColor >> 8) & 0xFF) * brightness;
+          uint8_t b = (noteColor & 0xFF) * brightness;
+          
+          // Add to existing color (additive blending)
+          uint32_t existing = SEGMENT.getPixelColor(pos);
+          r = std::min(255u, static_cast<unsigned int>(r) + ((existing >> 16) & 0xFF));
+          g = std::min(255u, static_cast<unsigned int>(g) + ((existing >> 8) & 0xFF));
+          b = std::min(255u, static_cast<unsigned int>(b) + (existing & 0xFF));
+          
+          SEGMENT.setPixelColor(pos, r, g, b);
+        }
+      }
+    }
+  } else {
+    // Circular mode - notes move around the strip
+    for (int note = 0; note < MAX_NOTES; note++) {
+      if (noteActivity[note].intensity > 0) {
+        // Calculate note position and width
+        int noteWidth = SEGLEN / 6;  // Narrower sections for cleaner look
+        int notePosition = (note * SEGLEN / MAX_NOTES + SEGENV.aux0) % SEGLEN;
+        
+        // Get color for this note
+        uint8_t colorIndex = (note * 21) % 256;
+        uint32_t noteColor = SEGMENT.color_from_palette(colorIndex, false, PALETTE_SOLID_WRAP, 0);
+        
+        // Draw note with smooth falloff
+        for (int offset = -noteWidth/2; offset <= noteWidth/2; offset++) {
+          int pos = (notePosition + offset + SEGLEN) % SEGLEN;
+          
+          // Calculate falloff based on distance from center
+          float distRatio = fabsf(offset) / (float)(noteWidth/2);
+          float falloff = exp(-4.0f * distRatio * distRatio);
+          
+          // Calculate final brightness
+          float brightness = noteActivity[note].intensity * falloff;
+          
+          // Apply color with brightness
+          uint8_t r = ((noteColor >> 16) & 0xFF) * brightness;
+          uint8_t g = ((noteColor >> 8) & 0xFF) * brightness;
+          uint8_t b = (noteColor & 0xFF) * brightness;
+          
+          // Add to existing color
+          uint32_t existing = SEGMENT.getPixelColor(pos);
+          r = std::min(255u, static_cast<unsigned int>(r) + ((existing >> 16) & 0xFF));
+          g = std::min(255u, static_cast<unsigned int>(g) + ((existing >> 8) & 0xFF));
+          b = std::min(255u, static_cast<unsigned int>(b) + (existing & 0xFF));
+          
+          SEGMENT.setPixelColor(pos, r, g, b);
+        }
+      }
+    }
+  }
+  
   if (NOTE_TRACKER_DEBUG && SEGENV.call % 32 == 0) {
-    Serial.printf("NOTE_TRACKER: Vol=%.1f Note=%d (%s) Thresh=%.1f\n",
-      volume, currentNote, (currentNote >= 0) ? NOTE_NAMES[currentNote] : "None", volumeThreshold);
+    Serial.printf("NOTE-TRACKER: Vol=%.1f Freq=%.1f Note=%d (%s) Mode=%d Sens=%.1f\n",
+      volume, frequency, dominantNote,
+      (dominantNote >= 0) ? NOTE_NAMES[dominantNote] : "None",
+      SEGENV.aux1, sensitivity);
   }
   
   return FRAMETIME;

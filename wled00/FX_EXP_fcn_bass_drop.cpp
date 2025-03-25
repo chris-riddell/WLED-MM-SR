@@ -3,24 +3,23 @@
 #include "fcn_declare.h"
 #include "palettes.h"
 #include "const.h"  // for USERMOD_ID_AUDIOREACTIVE
+#include "audio_utils.h"
 #include <cmath>
 
-#define MIN_VOLUME_THRESHOLD 30.0f
+// Increased time ranges for smoother transitions
+#define BUILDUP_DURATION 3000  // Maximum buildup time (3 seconds) - will be scaled by intensity/speed
+#define DROP_DURATION 4000     // Maximum drop time (4 seconds) - will be scaled by intensity/speed
+#define RECOVERY_DURATION 3000 // Maximum recovery time (3 seconds) - will be scaled by intensity/speed
+#define MIN_VOLUME_THRESHOLD 40.0f // Increased minimum threshold to prevent false triggers
 #define BASS_DROP_DEBUG 0
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
 
-// Define animation states
-#define STATE_IDLE 0
+// State definitions
+#define STATE_WAITING 0
 #define STATE_BUILDUP 1
 #define STATE_DROP 2
-#define STATE_SUSTAIN 3
-#define STATE_DECAY 4
-
-// Animation timing parameters
-#define DROP_DURATION 2000     // Duration of main effect in ms
-#define BUILDUP_DURATION 1500  // Duration of buildup effect in ms
-#define SUSTAIN_DURATION 1500  // How long to maintain peak effect after drop
-#define DECAY_DURATION 1500    // How long to fade out effect after sustain
+#define STATE_RECOVERY 3
+#define STATE_CALM 4
 
 // Forward declaration of helper functions
 extern float map_float(float x, float in_min, float in_max, float out_min, float out_max);
@@ -42,13 +41,15 @@ uint16_t mode_bass_drop(void) {
   // Get volume data
   float volume = *(float*)um_data->u_data[0];
   
-  // Allocate memory for effect state
+  // Allocate memory for state
   struct DropState {
     uint8_t state;            // Current animation state
     uint32_t stateStartTime;  // When current state began
     float intensity;          // Current effect intensity (0.0-1.0)
     float dropIntensity;      // Intensity of the detected drop (0.0-1.0)
     uint8_t colorOffset;      // Color offset for animation
+    float smoothedVolume;     // Smoothed volume
+    float prevDropIntensity;  // Previous drop intensity for hysteresis
   };
   
   if (!SEGENV.allocateData(sizeof(DropState))) {
@@ -60,213 +61,275 @@ uint16_t mode_bass_drop(void) {
   // Initialize on first call
   if (SEGENV.call == 0) {
     SEGMENT.fill(BLACK);
-    state->state = STATE_IDLE;
-    state->stateStartTime = 0;
-    state->intensity = 0;
-    state->dropIntensity = 0;
+    state->state = STATE_WAITING;
+    state->stateStartTime = millis();
+    state->intensity = 0.0f;
+    state->dropIntensity = 0.0f;
     state->colorOffset = 0;
+    state->smoothedVolume = 0.0f;
+    state->prevDropIntensity = 0.0f;
   }
   
-  // Speed controls animation speed
-  float speedFactor = map_float(SEGMENT.speed, 0, 255, 0.5f, 2.0f);
+  // Speed controls animation speed and transitions
+  float speedFactor = map_float(SEGMENT.speed, 0, 255, 0.3f, 4.0f);  // Significantly expanded range
   
-  // Sensitivity affects bass drop detection threshold
-  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 0.3f, 1.0f);
+  // Intensity controls "calmness" - higher value = more calm, gradual transitions
+  float calmness = map_float(SEGMENT.intensity, 0, 255, 0.2f, 1.5f);
+  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 1.2f, 0.25f);  // More sensitivity range, reversed
+  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 30.0f, 120.0f);  // Upper limit increased
   
   // Get current time
   uint32_t now = millis();
   uint32_t stateElapsed = now - state->stateStartTime;
   
-  // Detect bass drop
-  float dropIntensity = detectBassDropIntensity(um_data) * sensitivity;
+  // Smooth volume transition
+  state->smoothedVolume = state->smoothedVolume * 0.7f + volume * 0.3f;
   
-  // State machine for bass drop animation
-  switch (state->state) {
-    case STATE_IDLE:
-      // In idle state, watch for buildup or drop
-      if (dropIntensity >= 0.7f) {
-        // Strong bass drop detected - go straight to drop state
-        state->state = STATE_DROP;
-        state->stateStartTime = now;
-        state->dropIntensity = dropIntensity;
-        state->colorOffset = random8(); // Random color for this drop
-      } else if (dropIntensity >= 0.3f) {
-        // Buildup detected
-        state->state = STATE_BUILDUP;
-        state->stateStartTime = now;
-        state->intensity = dropIntensity;
-      }
-      break;
-      
-    case STATE_BUILDUP:
-      // In buildup state, intensity grows gradually
-      if (dropIntensity >= 0.7f) {
-        // Buildup escalated to drop
-        state->state = STATE_DROP;
-        state->stateStartTime = now;
-        state->dropIntensity = dropIntensity;
-      } else if (stateElapsed > BUILDUP_DURATION) {
-        // Buildup timed out without drop
-        state->state = STATE_IDLE;
-      } else {
-        // Continue buildup with increasing intensity
-        float progress = (float)stateElapsed / BUILDUP_DURATION;
-        state->intensity = max(dropIntensity, state->intensity * (1.0f - progress) + progress * 0.7f);
-      }
-      break;
-      
-    case STATE_DROP:
-      // Bass drop animation
-      if (stateElapsed > DROP_DURATION) {
-        // Move to sustain phase
-        state->state = STATE_SUSTAIN;
-        state->stateStartTime = now;
-      } else {
-        // During drop, intensity rises quickly to peak
-        float progress = (float)stateElapsed / DROP_DURATION;
-        state->intensity = state->dropIntensity * (1.0f - pow(1.0f - progress, 2));
-      }
-      break;
-      
-    case STATE_SUSTAIN:
-      // Sustain the peak effect
-      if (stateElapsed > SUSTAIN_DURATION) {
-        // Begin decay
-        state->state = STATE_DECAY;
-        state->stateStartTime = now;
-      }
-      // Keep intensity at peak during sustain
-      state->intensity = state->dropIntensity;
-      break;
-      
-    case STATE_DECAY:
-      // Decay the effect
-      if (stateElapsed > DECAY_DURATION) {
-        // Back to idle
-        state->state = STATE_IDLE;
-      } else {
-        // Gradual fade out
-        float progress = (float)stateElapsed / DECAY_DURATION;
-        state->intensity = state->dropIntensity * (1.0f - progress);
-      }
-      break;
+  // Detect bass drop with hysteresis
+  float rawDropIntensity = detectBassDropIntensity(um_data) * sensitivity;
+  
+  // Apply smoother transitions to drop intensity
+  float dropDiff = abs(rawDropIntensity - state->prevDropIntensity);
+  float dropIntensity;
+  
+  // Only accept significant changes
+  if (dropDiff > 0.1f || rawDropIntensity > state->prevDropIntensity) {
+    // More responsive to increases, less to decreases
+    if (rawDropIntensity > state->prevDropIntensity) {
+      // 70% new, 30% old - fast attack
+      dropIntensity = rawDropIntensity * 0.7f + state->prevDropIntensity * 0.3f;
+    } else {
+      // 30% new, 70% old - slow decay
+      dropIntensity = rawDropIntensity * 0.3f + state->prevDropIntensity * 0.7f;
+    }
+  } else {
+    dropIntensity = state->prevDropIntensity;
   }
   
-  // Apply the effect based on current state
+  state->prevDropIntensity = dropIntensity;
+  
+  // Scale timings by calmness and speed
+  uint32_t scaledDropDuration = DROP_DURATION * calmness / speedFactor;
+  uint32_t scaledBuildupDuration = BUILDUP_DURATION * calmness / speedFactor;
+  uint32_t scaledRecoveryDuration = RECOVERY_DURATION * calmness / speedFactor;
+  
+  // State machine logic
   switch (state->state) {
-    case STATE_IDLE:
-      // Background pulsing effect when idle
-      {
-        uint8_t baseBrightness = map(volume, MIN_VOLUME_THRESHOLD, 255, 20, 100);
-        float pulse = (sin(now / 1000.0f) + 1.0f) / 2.0f;  // 0.0-1.0 pulse
-        uint8_t brightness = baseBrightness + pulse * 30;
-        
-        for (int i = 0; i < SEGLEN; i++) {
-          uint8_t hue = (i * 256 / SEGLEN + now / 100) % 256;
-          uint32_t color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
-          
-          // Apply brightness
-          uint8_t r = ((color >> 16) & 0xFF) * brightness / 255;
-          uint8_t g = ((color >> 8) & 0xFF) * brightness / 255;
-          uint8_t b = (color & 0xFF) * brightness / 255;
-          
-          SEGMENT.setPixelColor(i, r, g, b);
-        }
+    case STATE_WAITING: {
+      // Waiting for buildup
+      if (dropIntensity > 0.3f && state->smoothedVolume > volumeThreshold) {
+        // Transition to buildup state
+        state->state = STATE_BUILDUP;
+        state->stateStartTime = now;
+        state->dropIntensity = dropIntensity;
       }
+      // Simple ambient pattern when waiting
+      state->colorOffset = (state->colorOffset + 1) % 256;
       break;
+    }
       
-    case STATE_BUILDUP:
-      // Buildup effect - increasing waves from center
-      {
-        uint8_t baseBrightness = map(volume, MIN_VOLUME_THRESHOLD, 255, 50, 150);
-        float intensity = state->intensity;
+    case STATE_BUILDUP: {
+      // During buildup
+      if (dropIntensity > 0.7f && stateElapsed > 500) {
+        // Strong drop detected, transition to drop state
+        state->state = STATE_DROP;
+        state->stateStartTime = now;
+        state->dropIntensity = max(dropIntensity, state->dropIntensity);
         
-        // Calculate wave parameters
-        float waveSpeed = 0.2f + intensity * 2.0f;  // Speed increases with intensity
-        float waveFreq = 1.0f + intensity * 5.0f;   // Frequency increases with intensity
-        
-        for (int i = 0; i < SEGLEN; i++) {
-          // Calculate distance from center (0.0-1.0)
-          float posRatio = abs((float)(i - SEGLEN/2) / (SEGLEN/2));
-          
-          // Create waves moving outward from center
-          float wave = sin(posRatio * PI * waveFreq + now / (1000.0f / waveSpeed));
-          
-          // Calculate brightness that increases with intensity
-          uint8_t brightness = baseBrightness + intensity * 105 * (0.5f + 0.5f * wave);
-          
-          // Use hue that shifts with time and intensity
-          uint8_t hue = (i * 128 / SEGLEN + (int)(now / 30) + (int)(intensity * 128)) % 256;
-          uint32_t color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
-          
-          // Apply brightness
-          uint8_t r = ((color >> 16) & 0xFF) * brightness / 255;
-          uint8_t g = ((color >> 8) & 0xFF) * brightness / 255;
-          uint8_t b = (color & 0xFF) * brightness / 255;
-          
-          SEGMENT.setPixelColor(i, r, g, b);
-        }
+        // Reset color offset for drop effect
+        state->colorOffset = random8();
+      } 
+      else if (stateElapsed > scaledBuildupDuration) {
+        // Buildup timeout without drop, return to waiting
+        state->state = STATE_WAITING;
+        state->stateStartTime = now;
       }
-      break;
       
-    case STATE_DROP:
-    case STATE_SUSTAIN:
-    case STATE_DECAY:
-      // Bass drop effect - intense pulsing spiral
-      {
-        uint8_t baseBrightness = map(volume, MIN_VOLUME_THRESHOLD, 255, 100, 255);
-        float intensity = state->intensity;
-        
-        // Calculate animation parameters
-        float rotationSpeed = intensity * 5.0f * speedFactor;  // Rotation speed increases with intensity
-        float pulseSpeed = intensity * 15.0f * speedFactor;    // Pulse speed increases with intensity
-        float width = 0.3f + intensity * 0.5f;                 // Width increases with intensity
-        
-        for (int i = 0; i < SEGLEN; i++) {
-          // Calculate position ratio (0.0-1.0)
-          float posRatio = (float)i / SEGLEN;
-          
-          // Create spiral effect
-          float spiral = fmod(posRatio * 3.0f + (now / (1000.0f / rotationSpeed)), 1.0f);
-          
-          // Add pulsing
-          float pulse = sin(now / (1000.0f / pulseSpeed)) * 0.5f + 0.5f;
-          
-          // Calculate brightness using spiral and pulse
-          float brightnessFactor;
-          if (spiral < width) {
-            // In the bright part of the spiral
-            brightnessFactor = 0.7f + 0.3f * pulse;
-          } else {
-            // In the dim part of the spiral
-            brightnessFactor = 0.2f + 0.2f * pulse;
-          }
-          
-          // Apply intensity to brightness
-          uint8_t brightness = baseBrightness * brightnessFactor * intensity;
-          
-          // Use color based on drop pattern
-          int temp = state->colorOffset;
-          temp += i * 3;
-          temp += (int)(now / 30);
-          uint8_t hue = (i * 128 / SEGLEN + (int)(now / 30) + (int)(intensity * 128)) % 256;
-          uint32_t color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
-          
-          // Apply brightness
-          uint8_t r = ((color >> 16) & 0xFF) * brightness / 255;
-          uint8_t g = ((color >> 8) & 0xFF) * brightness / 255;
-          uint8_t b = (color & 0xFF) * brightness / 255;
-          
-          SEGMENT.setPixelColor(i, r, g, b);
-        }
-      }
+      // Update intensity during buildup - gradually increasing
+      state->intensity = min(0.8f, stateElapsed / (float)scaledBuildupDuration * state->dropIntensity);
+      
+      // Slow color movement during buildup
+      if (stateElapsed % 2 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
       break;
+    }
+      
+    case STATE_DROP: {
+      // During drop
+      if (stateElapsed > scaledDropDuration) {
+        // Drop phase complete, transition to recovery
+        state->state = STATE_RECOVERY;
+        state->stateStartTime = now;
+      }
+      
+      // Maximum intensity during drop with slight decay
+      float dropProgress = stateElapsed / (float)scaledDropDuration;
+      if (dropProgress < 0.3f) {
+        // Increase to peak during first 30% of drop
+        state->intensity = min(1.0f, state->dropIntensity * (1.0f + dropProgress));
+      } else {
+        // Gradual decrease during remaining 70%
+        state->intensity = max(0.2f, state->dropIntensity * (1.8f - dropProgress));
+      }
+      
+      // Fast color movement during drop
+      state->colorOffset = (state->colorOffset + 2) % 256;
+      break;
+    }
+      
+    case STATE_RECOVERY: {
+      // Recovery phase after drop
+      if (stateElapsed > scaledRecoveryDuration) {
+        // Recovery complete, return to calm state
+        state->state = STATE_CALM;
+        state->stateStartTime = now;
+      }
+      
+      // Gradually decrease intensity during recovery
+      state->intensity = max(0.0f, state->dropIntensity * (1.0f - stateElapsed / (float)scaledRecoveryDuration));
+      
+      // Moderate color movement during recovery
+      if (stateElapsed % 3 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
+      break;
+    }
+      
+    case STATE_CALM: {
+      // Brief calm period before returning to waiting
+      if (stateElapsed > 2000) {
+        state->state = STATE_WAITING;
+        state->stateStartTime = now;
+      }
+      
+      // Minimal intensity during calm
+      state->intensity = max(0.0f, 0.2f - (stateElapsed / 2000.0f * 0.2f));
+      
+      // Slow color changes
+      if (stateElapsed % 5 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
+      break;
+    }
+  }
+  
+  // MODIFIED: Enhanced visualization optimized for mandala configuration
+  // Create radial patterns that flow outward from center
+  for (int i = 0; i < SEGLEN; i++) {
+    // For mandala, calculate distance from center
+    float distFromCenter = (float)i / SEGLEN;
+    
+    // Get base time factor adjusted by speed and intensity
+    uint32_t timebase = now / (10 + (5 / speedFactor));
+    
+    // Create different patterns based on state
+    uint32_t color;
+    float brightness = 1.0f;
+    
+    switch (state->state) {
+      case STATE_WAITING: {
+        // Subtle ambient pattern when waiting
+        // Gentle pulse from center
+        float pulse = (sin(timebase / 200.0f) + 1.0f) / 2.0f;
+        float wave = sin(distFromCenter * PI + timebase / 500.0f) * 0.5f + 0.5f;
+        
+        brightness = 0.3f + (wave * pulse * 0.2f);
+        uint8_t hue = state->colorOffset + (distFromCenter * 20);
+        color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
+        break;
+      }
+        
+      case STATE_BUILDUP: {
+        // Building anticipation - waves moving outward faster as buildup increases
+        // Create accelerating waves moving outward
+        float buildupProgress = stateElapsed / (float)scaledBuildupDuration;
+        float waveSpeed = 300.0f + buildupProgress * 700.0f;
+        float wave = sin(distFromCenter * 5.0f * PI + timebase / (1000.0f - waveSpeed));
+        
+        // Pulse brightness with increasing intensity
+        float pulse = (sin(timebase / (500.0f - 300.0f * buildupProgress)) + 1.0f) / 2.0f;
+        brightness = 0.4f + (wave * pulse * state->intensity * 0.6f);
+        
+        // Color gradually shifts during buildup
+        uint8_t hue = state->colorOffset + (distFromCenter * 30);
+        color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
+        break;
+      }
+        
+      case STATE_DROP: {
+        // Dynamic outward flowing waves during drop
+        float dropProgress = stateElapsed / (float)scaledDropDuration;
+        float baseFreq = 4.0f + state->intensity * 5.0f; // Frequency increases with intensity
+        
+        // Primary wave - fast outward movement
+        float wave1 = sin(distFromCenter * baseFreq * PI - timebase / (50.0f / state->intensity));
+        
+        // Secondary wave - slower, phase-shifted
+        float wave2 = sin(distFromCenter * (baseFreq * 0.7f) * PI - timebase / (80.0f / state->intensity) + PI/2);
+        
+        // Combine waves with varying influence
+        float combinedWave = (wave1 * 0.7f + wave2 * 0.3f);
+        
+        // Add radial brightness variation - center pulses brighter during drop
+        float centerEffect = (1.0f - distFromCenter) * 0.5f * (sin(timebase / 100.0f) + 1.0f);
+        
+        // Final brightness with strong center pulse
+        brightness = 0.4f + (combinedWave * 0.3f + centerEffect) * state->intensity;
+        
+        // Dynamic color movement based on drop intensity
+        uint8_t hueShift = distFromCenter * 60.0f + dropProgress * 128.0f;
+        uint8_t hue = state->colorOffset + hueShift;
+        color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
+        break;
+      }
+        
+      case STATE_RECOVERY: {
+        // Calming outward waves during recovery
+        // Recovery waves are slower and more spread out
+        float recoveryProgress = stateElapsed / (float)scaledRecoveryDuration;
+        
+        // Gentle waves moving outward
+        float wave = sin(distFromCenter * 3.0f * PI - timebase / 120.0f);
+        
+        // Brightness fades as recovery progresses
+        brightness = 0.3f + wave * (0.7f - recoveryProgress * 0.5f) * state->intensity;
+        
+        // Color shift slows down during recovery
+        uint8_t hueShift = distFromCenter * 40.0f;
+        uint8_t hue = state->colorOffset + hueShift;
+        color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
+        break;
+      }
+        
+      case STATE_CALM: {
+        // Minimal animation during calm state
+        // Very subtle movement
+        float calmProgress = stateElapsed / 2000.0f;
+        float wave = sin(distFromCenter * PI * 2.0f + timebase / 800.0f) * 0.5f + 0.5f;
+        
+        // Low brightness that fades out
+        brightness = (0.3f - calmProgress * 0.2f) * (0.7f + wave * 0.3f);
+        
+        // Gentle color gradient
+        uint8_t hue = state->colorOffset + (distFromCenter * 25);
+        color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
+        break;
+      }
+    }
+    
+    // Apply final brightness adjustment based on drop intensity and volume
+    brightness = constrain(brightness, 0.0f, 1.0f);
+    float volumeFactor = max(0.5f, min(1.0f, state->smoothedVolume / 255.0f));
+    brightness *= volumeFactor;
+    
+    // Apply brightness to color
+    uint8_t r = ((color >> 16) & 0xFF) * brightness;
+    uint8_t g = ((color >> 8) & 0xFF) * brightness;
+    uint8_t b = (color & 0xFF) * brightness;
+    
+    SEGMENT.setPixelColor(i, r, g, b);
   }
   
   // Debug output
   if (BASS_DROP_DEBUG && SEGENV.call % 32 == 0) {
-    Serial.printf("BASS_DROP: Vol=%.1f Drop=%.2f State=%d Elapsed=%u Int=%.2f\n",
-      volume, dropIntensity, state->state, stateElapsed, state->intensity);
+    const char* stateLabels[] = {"Waiting", "Buildup", "Drop", "Recovery", "Calm"};
+    Serial.printf("EXP-BASS-DROP: State=%s Vol=%.1f Drop=%.2f Int=%.2f Elapsed=%d\n",
+      stateLabels[state->state], state->smoothedVolume, dropIntensity, state->intensity, stateElapsed);
   }
   
   return FRAMETIME;

@@ -6,8 +6,9 @@
 #include "audio_utils.h"
 #include <cmath>
 
-#define TONALITY_HISTORY_SIZE 10
-#define MIN_VOLUME_THRESHOLD 30.0f
+// Increased history size for smoother transitions
+#define TONALITY_HISTORY_SIZE 20  // Increased from 10
+#define MIN_VOLUME_THRESHOLD 40.0f  // Increased from 30.0f
 #define HARMONIC_DEBUG 0
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
 
@@ -31,17 +32,22 @@ uint16_t mode_harmonic_viz(void) {
   // Get volume data
   float volume = *(float*)um_data->u_data[0];
   
-  // Allocate memory for tonality history
-  if (!SEGENV.allocateData(sizeof(int) * TONALITY_HISTORY_SIZE)) {
+  // Allocate memory for tonality history and smoothing state
+  if (!SEGENV.allocateData(sizeof(int) * TONALITY_HISTORY_SIZE + sizeof(float) * 2)) {
     return FRAMETIME; // Failed to allocate memory
   }
   
   int* tonalityHistory = reinterpret_cast<int*>(SEGENV.data);
+  // Store smoothed tonality value and last detected tonality at the end
+  float* smoothedTonality = reinterpret_cast<float*>(SEGENV.data + sizeof(int) * TONALITY_HISTORY_SIZE);
+  float* lastTonality = smoothedTonality + 1;
   
   // Initialize on first call
   if (SEGENV.call == 0) {
     SEGMENT.fill(BLACK);
     SEGENV.aux0 = 0;  // Color movement counter
+    *smoothedTonality = 0.0f;  // Start with neutral tonality
+    *lastTonality = 0.0f;
     
     // Initialize tonality history
     for (int i = 0; i < TONALITY_HISTORY_SIZE; i++) {
@@ -49,13 +55,17 @@ uint16_t mode_harmonic_viz(void) {
     }
   }
   
-  // Speed controls color change rate and effect responsiveness
-  uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, 1, 3);
+  // Speed controls color change rate, animation speed, and wave dynamics
+  uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, 1, 10);  // Expanded range from 1-6 to 1-10
+  float animationSpeed = map_float(SEGMENT.speed, 0, 255, 0.3f, 4.0f); // Wider animation speed range
+  float waveFrequency = map_float(SEGMENT.speed, 0, 255, 0.8f, 6.0f); // Expanded wave frequency range
   
-  // Sensitivity affects minimum volume threshold
-  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 80.0f, MIN_VOLUME_THRESHOLD);
+  // Intensity now controls "calmness" - higher value = more calm, gradual transitions
+  float calmness = map_float(SEGMENT.intensity, 0, 255, 0.2f, 1.5f);
+  float smoothingFactor = 0.05f + (calmness * 0.15f); // More smoothing at higher intensities
+  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 30.0f, 120.0f); // Upper limit increased
   
-  // Update color movement counter
+  // Update color movement counter at variable speed
   SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 256;
   
   // Only detect tonality if volume is sufficient
@@ -65,20 +75,32 @@ uint16_t mode_harmonic_viz(void) {
     // Detect tonality
     float tonality = detectTonality(um_data);
     
-    // Update history
-    tonalityHistory[historyIndex] = tonality;
-    historyIndex = (historyIndex + 1) % TONALITY_HISTORY_SIZE;
+    // Add hysteresis to prevent rapid fluctuations
+    float tonalityDiff = abs(tonality - *lastTonality);
+    if (tonalityDiff > 0.5f) {
+      // Only update if change is significant
+      *lastTonality = tonality;
+      
+      // Update history
+      tonalityHistory[historyIndex] = tonality;
+      historyIndex = (historyIndex + 1) % TONALITY_HISTORY_SIZE;
+    }
   }
   
-  // Calculate dominant tonality over history
+  // Calculate dominant tonality over history with weighted voting
   int majorCount = 0;
   int minorCount = 0;
   int neutralCount = 0;
   
+  // Use weighted voting where recent values count more
   for (int i = 0; i < TONALITY_HISTORY_SIZE; i++) {
-    if (tonalityHistory[i] > 0) majorCount++;
-    else if (tonalityHistory[i] < 0) minorCount++;
-    else neutralCount++;
+    // Circular buffer - find actual index relative to current
+    int actualIndex = (historyIndex - 1 - i + TONALITY_HISTORY_SIZE) % TONALITY_HISTORY_SIZE;
+    float weight = (TONALITY_HISTORY_SIZE - i) / (float)TONALITY_HISTORY_SIZE;
+    
+    if (tonalityHistory[actualIndex] > 0) majorCount += weight * 10;
+    else if (tonalityHistory[actualIndex] < 0) minorCount += weight * 10;
+    else neutralCount += weight * 10;
   }
   
   // Determine dominant tonality
@@ -89,52 +111,83 @@ uint16_t mode_harmonic_viz(void) {
     dominantTonality = -1;  // Minor
   }
   
+  // Smooth tonality transitions - approach dominant tonality gradually
+  float targetTonality = (float)dominantTonality;
+  *smoothedTonality = *smoothedTonality * (1.0f - smoothingFactor) + targetTonality * smoothingFactor;
+  
+  // Calculate a smoothed tonality factor (-1.0 to 1.0)
+  float tonalityFactor = *smoothedTonality;
+  
   // Set up color schemes based on tonality
   uint8_t baseHue = SEGENV.aux0;
-  uint8_t saturation = 255;
-  uint8_t brightness = map(volume, volumeThreshold, 255, 64, 255);
+  uint8_t saturation;
+  // Cap maximum brightness to prevent white flashes
+  uint8_t brightness = map(volume, volumeThreshold, 255, 64, 180);  // Reduced maximum from 255 to 180
   
-  // Adjust color scheme based on tonality
-  if (dominantTonality > 0) {
+  // Adjust color scheme based on smoothed tonality
+  if (tonalityFactor > 0) {
     // Major: Bright complementary colors (analogous)
-    saturation = 220;
-    // Use base hue and analogous colors
-  } else if (dominantTonality < 0) {
-    // Minor: Deeper, more saturated colors (complementary)
-    saturation = 255;
-    // Use base hue and complementary colors (opposite on wheel)
-    baseHue = (baseHue + 128) % 256;
+    // Linearly interpolate saturation based on how "major" it is
+    saturation = 220 - (tonalityFactor * 70);  // Less saturation as it becomes more major
+  } else if (tonalityFactor < 0) {
+    // Minor: Deeper, more saturated colors
+    saturation = 180 + (abs(tonalityFactor) * 75);  // More saturation as it becomes more minor
+    // Shift base hue based on minor factor
+    baseHue = (baseHue + (int)(abs(tonalityFactor) * 128)) % 256;
   } else {
-    // Neutral: Desaturated colors
+    // Neutral: Moderate saturation
     saturation = 150;
   }
   
-  // Visualize with flowing pattern
+  // Scale brightness by calmness but ensure it never goes above 200
+  brightness = constrain(64 + (brightness - 64) / calmness, 0, 200);
+  
+  // Get current time for animations
+  uint32_t now = millis();
+  
+  // Visualize with flowing pattern optimized for circular display
   for (int i = 0; i < SEGLEN; i++) {
-    // Calculate position-based parameters
-    float posRatio = (float)i / SEGLEN;
+    // For circular layout, calculate radial position (0 = center, 1 = edge)
+    int halfLength = SEGLEN / 2;
+    int distFromCenter = abs(i - halfLength);
+    if (distFromCenter > halfLength) distFromCenter = SEGLEN - distFromCenter;
+    float radialPos = (float)distFromCenter / halfLength;
     
-    // Create flowing waves using sine
-    float wave = sin(posRatio * TWO_PI * 3 + millis() / 1000.0f);
+    // Angle around the circle (0-360 degrees)
+    float angle = (float)i / SEGLEN * TWO_PI;
     
-    // Adjust hue based on position and tonality
-    uint8_t hueOffset;
-    if (dominantTonality > 0) {
-      // Major: small hue shifts (analogous colors)
-      hueOffset = 30 * wave;
-    } else if (dominantTonality < 0) {
-      // Minor: larger hue shifts
-      hueOffset = 60 * wave;
+    // Create waves based on radial position and angle
+    float wave1 = sin(radialPos * TWO_PI * waveFrequency + now / (1000.0f / animationSpeed));
+    float wave2 = cos(angle * 3 + now / (2000.0f / animationSpeed));
+    float combinedWave = (wave1 + wave2) / 2.0f;
+    
+    // Adjust hue based on position, tonality, and waves
+    float hueShift;
+    if (tonalityFactor > 0) {
+      // Major: gentle hue shifts with rainbow pattern
+      hueShift = 30.0f * combinedWave * (1.0f + tonalityFactor);
+    } else if (tonalityFactor < 0) {
+      // Minor: sharper hue contrasts
+      hueShift = 60.0f * combinedWave * (1.0f + abs(tonalityFactor));
     } else {
-      // Neutral: middle ground
-      hueOffset = 45 * wave;
+      // Neutral: moderate shifts
+      hueShift = 45.0f * combinedWave;
     }
     
-    // Calculate final hue
-    uint8_t hue = (baseHue + hueOffset) % 256;
+    // Calculate final hue with smoother transitions
+    uint8_t hue = (baseHue + (int)hueShift) % 256;
     
-    // Adjust brightness based on wave
-    uint8_t waveBrightness = brightness * (0.7f + 0.3f * wave);
+    // Adjust brightness based on waves and radial position
+    float waveBrightness = brightness * (0.7f + 0.3f * combinedWave);
+    
+    // Add circular pattern - brighter in center for major, brighter at edges for minor
+    if (tonalityFactor > 0) {
+      // Major: brighter in center (happy, expansive)
+      waveBrightness *= (1.0f - radialPos * 0.3f * tonalityFactor);
+    } else if (tonalityFactor < 0) {
+      // Minor: brighter at edges (dark, moody)
+      waveBrightness *= (1.0f + radialPos * 0.3f * abs(tonalityFactor));
+    }
     
     // Get color from palette 
     uint32_t color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
@@ -160,8 +213,8 @@ uint16_t mode_harmonic_viz(void) {
   
   // Debug output
   if (HARMONIC_DEBUG && SEGENV.call % 32 == 0) {
-    Serial.printf("HARMONIC_VIZ: Vol=%.1f Tonality=%d (Maj:%d Min:%d Neu:%d) Sat=%d\n",
-      volume, dominantTonality, majorCount, minorCount, neutralCount, saturation);
+    Serial.printf("EXP-HARMONIC-VIZ: Vol=%.1f Tonality=%.2f (Maj:%d Min:%d Neu:%d) Sat=%d Calm=%.2f\n",
+      volume, tonalityFactor, majorCount/10, minorCount/10, neutralCount/10, saturation, calmness);
   }
   
   return FRAMETIME;

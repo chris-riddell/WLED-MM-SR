@@ -4,6 +4,8 @@
 #include "palettes.h"
 #include <cmath>
 
+#define AUDIO_HELPERS_DEBUG 0  // Setting debug flag to 0
+
 // Common helper functions for audio reactive effects
 
 // Helper function for float mapping
@@ -151,26 +153,32 @@ float detectTonality(um_data_t *um_data) {
   
   uint8_t* fftData = (uint8_t*)um_data->u_data[2];
   
-  // This is an extreme simplification
-  // Real tonality detection would analyze harmonic content over time
+  // Improved algorithm with more bin weighting
+  // Lower bins (0-3): bass/fundamental
+  // Mid bins (4-10): harmonics that determine major/minor
+  // High bins (11-15): overtones
   
-  // Get energy in mid-high frequencies (bins 8-15)
-  float highFreqEnergy = 0;
-  for (int i = 8; i < 16; i++) {
-    highFreqEnergy += fftData[i];
-  }
-  
-  // Get energy in low-mid frequencies (bins 0-7)
   float lowFreqEnergy = 0;
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < 4; i++) {
     lowFreqEnergy += fftData[i];
   }
   
-  // High energy in higher frequencies often correlates with major keys
-  // This is a very rough approximation
-  if (highFreqEnergy > lowFreqEnergy * 1.5f) {
+  float midFreqEnergy = 0;
+  for (int i = 4; i < 11; i++) {
+    // Weight these bins more as they contain the third and fifth harmonics
+    midFreqEnergy += fftData[i] * 1.5f;
+  }
+  
+  float highFreqEnergy = 0;
+  for (int i = 11; i < 16; i++) {
+    highFreqEnergy += fftData[i];
+  }
+  
+  // Improved heuristic: major keys typically have more energy in harmonics
+  // Minor keys tend to have less energy in harmonics relative to fundamentals
+  if (midFreqEnergy > (lowFreqEnergy * 0.8f) && highFreqEnergy > (lowFreqEnergy * 0.4f)) {
     return 1.0f; // Major
-  } else if (lowFreqEnergy > highFreqEnergy * 1.2f) {
+  } else if (lowFreqEnergy > midFreqEnergy * 1.1f) {
     return -1.0f; // Minor
   }
   

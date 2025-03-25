@@ -10,6 +10,7 @@
  */
 #define MAX_COMETS 12 // was 8
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
+#define MULTI_COMET_DEBUG 0  // Setting debug flag to 0
 
 uint16_t mode_static(void);  // Forward declaration
 
@@ -28,7 +29,7 @@ uint16_t mode_multi_comet_134(void)
   if (SEGENV.step == it) return FRAMETIME;
   uint16_t armed = SEGENV.aux0;   // WLEDSR allows to delay comet launch
   bool shotOne = false;           // WLEDSR avoids starting several comets at the same time (invisible due to overlap)
-  SEGMENT.fadeToBlackBy(SEGMENT.intensity);
+  SEGMENT.fade_out(SEGMENT.intensity);
 
   // Get audio data
   um_data_t *um_data;
