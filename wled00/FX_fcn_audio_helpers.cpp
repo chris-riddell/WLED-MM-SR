@@ -83,8 +83,8 @@ float detectBassDropIntensity(um_data_t *um_data) {
   
   // Check for drop conditions
   bool isBassStrong = normalizedBass > 0.5f;
-  bool isBassIncreasing = normalizedBassChange > 0.1f;
-  bool isVolumeIncreasing = volumeChange > 2.0f;
+  bool isBassIncreasing = normalizedBassChange > 0.07f;
+  bool isVolumeIncreasing = volumeChange > 1.5f;
   bool isCooldownOver = (millis() - lastDropTime) > DROP_COOLDOWN;
   
   // Bass drop detection

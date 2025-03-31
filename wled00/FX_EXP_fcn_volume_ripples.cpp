@@ -85,7 +85,7 @@ uint16_t mode_volume_ripples(void) {
   
   // IMPROVED: Speed now controls ripple expansion rate and fade speed with wider range
   uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, 1, 8);  // Reduced from 2-12 for slower movement
-  float expansionRate = map_float(SEGMENT.speed, 0, 255, 0.005f, 0.12f);  // Much lower minimum for slower movement
+  float expansionRate = map_float(SEGMENT.speed, 0, 255, 0.002f, 0.1f);  // Much lower minimum for slower movement
   float fadeRateAdjustment = map_float(SEGMENT.speed, 0, 255, 0.998f, 0.975f); // Slower minimum fade
   
   // IMPROVED: Intensity controls volume threshold for new ripples

@@ -37,12 +37,14 @@
 // WLEDMM replace abs8 by abs, as abs8 does not work for numbers >127
 #define abs8(x) abs(x)
 
-static const char _data_FX_MODE_MULTI_COMET_BASS_AR[] PROGMEM = "♪ Multi Comet Bass AR CE@Speed=128,Bass Detection=128,Tail Length=128,Min Volume=128;!,!;!;1v;m12=2,si=0;Palette";
+static const char _data_FX_MODE_MULTI_COMET_BASS_AR[] PROGMEM = "♪ Multi Comet Bass AR CE@Speed=128,Bass Detection=128,Tail Length=128;!,!;!;1v;m12=2,si=0;Palette";
 static const char _data_FX_MODE_NOISEMETER_OG[] PROGMEM = "♪ Noisemeter AR CE@Response Speed=128,Volume Sensitivity=128,Max Brightness=128;!,!;!;1v;m12=2,si=0;Palette";
 static const char _data_FX_MODE_MULTI_COMET_134_AR[] PROGMEM = "♪ Multi Comet 134 AR CE@Speed=128,Fade Rate=128;!,!;!;1v;m12=2,si=0;Palette";
 static const char _data_FX_MODE_FFT_SPECTRUM_AR[] PROGMEM = "♪ FFT Spectrum AR CE@Speed=128,Fade Rate=128;!,!;!;1v;m12=2,si=0;Palette";
 static const char _data_FX_MODE_PLINTH[] PROGMEM = "Plinth CE@Speed=128,Intensity=128;!,!;!;1v;m12=2,si=0;Palette";
+static const char _data_FX_MODE_NOISEMETER_134[] PROGMEM = "♪ Noisemeter 134 AR@Speed=128,Intensity=128;!,!;!;1v;m12=2,si=0;Palette";
 
+static const char _data_FX_MODE_SPECTRAL_FLUX_FIRENIGHT[] PROGMEM = "♪ !EXP Spectral Flux FIRENIGHT AR CE@Speed=128,Fade Rate=128;!,!;!;1v;m12=2,si=0;Palette";
 static const char _data_FX_MODE_VOLUME_RIPPLES[] PROGMEM = "♪ !EXP Volume Ripples AR CE@Speed=128,Fade Rate=128;!,!;!;1v;m12=2,si=0;Palette";
 static const char _data_FX_MODE_DYNAMIC_RANGE[] PROGMEM = "♪ !EXP Dynamic Range AR CE@Speed=128,Fade Rate=128;!,!;!;1v;m12=2,si=0;Palette";
 static const char _data_FX_MODE_NOTE_TRACKER[] PROGMEM = "♪ !EXP Note Tracker AR CE@Speed=128,Fade Rate=128;!,!;!;1v;m12=2,si=0;Palette";
@@ -9254,6 +9256,8 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_MULTI_COMET_134_AR, &mode_multi_comet_134, _data_FX_MODE_MULTI_COMET_134_AR);
   addEffect(FX_MODE_FFT_SPECTRUM_AR, &mode_fft_spectrum_ar, _data_FX_MODE_FFT_SPECTRUM_AR);
   addEffect(FX_MODE_PLINTH, &mode_plinth, _data_FX_MODE_PLINTH);
+  addEffect(FX_MODE_NOISEMETER_134, &mode_noisemeter_134, _data_FX_MODE_NOISEMETER_134);
+  addEffect(FX_MODE_SPEC_FLUX_FIRENIGHT, &mode_spec_flux_firenight, _data_FX_MODE_SPECTRAL_FLUX_FIRENIGHT);
 
   addEffect(FX_MODE_VOLUME_RIPPLES, &mode_volume_ripples, _data_FX_MODE_VOLUME_RIPPLES);
   addEffect(FX_MODE_DYNAMIC_RANGE, &mode_dynamic_range, _data_FX_MODE_DYNAMIC_RANGE);

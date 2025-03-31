@@ -47,13 +47,27 @@ uint16_t mode_multi_comet_134(void)
   for(uint8_t i=0; i < MAX_COMETS; i++) {
     if(comets[i] < SEGLEN) {
       uint16_t index = comets[i];
+      uint32_t baseColor;
       if (SEGCOLOR(2) != 0)
       {
-        SEGMENT.setPixelColor(index, i % 2 ? SEGMENT.color_from_palette(index, true, PALETTE_SOLID_WRAP, 0) : SEGCOLOR(2));
+        baseColor = (i % 2 ? SEGMENT.color_from_palette(index, true, PALETTE_SOLID_WRAP, 0) : SEGCOLOR(2));
+        //SEGMENT.setPixelColor(index, i % 2 ? SEGMENT.color_from_palette(index, true, PALETTE_SOLID_WRAP, 0) : SEGCOLOR(2));
       } else
       {
-        SEGMENT.setPixelColor(index, SEGMENT.color_from_palette(index, true, PALETTE_SOLID_WRAP, 0));
+        baseColor = SEGMENT.color_from_palette(index, true, PALETTE_SOLID_WRAP, 0);
       }
+      // Reduce potential whiteness by slightly lowering max brightness
+      // Extract color components
+      uint8_t r = (uint8_t)((baseColor >> 16) & 0xFF);
+      uint8_t g = (uint8_t)((baseColor >> 8) & 0xFF);
+      uint8_t b = (uint8_t)(baseColor & 0xFF);
+      
+      // Cap at 240 to reduce potential whiteness
+      if (r > 240) r = 240;
+      if (g > 240) g = 240;
+      if (b > 240) b = 240;
+      
+      SEGMENT.setPixelColor(index, r, g, b);
       comets[i]++;
     } else {
       if (!useAudio) {

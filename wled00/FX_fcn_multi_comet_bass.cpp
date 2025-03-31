@@ -152,11 +152,16 @@ float getBassIntensity(um_data_t* um_data) {
   }
 
   // Validate audio data
-  if (!isAudioDataValid(um_data, shouldDebug)) {
+  if (!isAudioDataValid(um_data)) {
     return 0.0f;
   }
 
-  // Get FFT data and perform initial validation
+  float volume = *(float*)um_data->u_data[0];
+  // REMOVED: Explicit volume check - rely on usermod squelch
+  // if (volume < MIN_BASS_VOLUME) {
+  //     return 0.0f;
+  // }
+  
   uint8_t* fftData = (uint8_t*)um_data->u_data[2];
   
   // Early return if bass is too weak

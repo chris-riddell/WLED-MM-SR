@@ -33,7 +33,7 @@ uint16_t mode_harmonic_viz(void) {
   float volume = *(float*)um_data->u_data[0];
   
   // Allocate memory for tonality history and smoothing state
-  if (!SEGENV.allocateData(sizeof(int) * TONALITY_HISTORY_SIZE + sizeof(float) * 2)) {
+  if (!SEGENV.allocateData(sizeof(int) * TONALITY_HISTORY_SIZE + sizeof(float) * 3)) {
     return FRAMETIME; // Failed to allocate memory
   }
   
@@ -41,6 +41,7 @@ uint16_t mode_harmonic_viz(void) {
   // Store smoothed tonality value and last detected tonality at the end
   float* smoothedTonality = reinterpret_cast<float*>(SEGENV.data + sizeof(int) * TONALITY_HISTORY_SIZE);
   float* lastTonality = smoothedTonality + 1;
+  float* smoothedBrightness = lastTonality + 1; // Store smoothed brightness
   
   // Initialize on first call
   if (SEGENV.call == 0) {
@@ -48,6 +49,7 @@ uint16_t mode_harmonic_viz(void) {
     SEGENV.aux0 = 0;  // Color movement counter
     *smoothedTonality = 0.0f;  // Start with neutral tonality
     *lastTonality = 0.0f;
+    *smoothedBrightness = 100.0f; // Initial smoothed brightness
     
     // Initialize tonality history
     for (int i = 0; i < TONALITY_HISTORY_SIZE; i++) {
@@ -122,7 +124,7 @@ uint16_t mode_harmonic_viz(void) {
   uint8_t baseHue = SEGENV.aux0;
   uint8_t saturation;
   // Cap maximum brightness to prevent white flashes
-  uint8_t brightness = map(volume, volumeThreshold, 255, 64, 180);  // Reduced maximum from 255 to 180
+  uint8_t targetBrightness = map(volume, volumeThreshold, 255, 80, 230); // Slightly reduced min, increased max
   
   // Adjust color scheme based on smoothed tonality
   if (tonalityFactor > 0) {
@@ -139,8 +141,14 @@ uint16_t mode_harmonic_viz(void) {
     saturation = 150;
   }
   
-  // Scale brightness by calmness but ensure it never goes above 200
-  brightness = constrain(64 + (brightness - 64) / calmness, 0, 200);
+  // Scale brightness by calmness but ensure it never goes above 230
+  targetBrightness = constrain(80 + (targetBrightness - 80) * (1.0f + (1.0f / calmness)), 0, 230);
+  
+  // SMOOTH brightness transitions
+  float brightnessSmoothingFactor = 0.10f / calmness; // Slower smoothing, adjustable by calmness
+  *smoothedBrightness = *smoothedBrightness * (1.0f - brightnessSmoothingFactor) + 
+                         targetBrightness * brightnessSmoothingFactor;
+  uint8_t brightness = constrain(*smoothedBrightness, 0, 255);
   
   // Get current time for animations
   uint32_t now = millis();
@@ -177,7 +185,7 @@ uint16_t mode_harmonic_viz(void) {
     // Calculate final hue with smoother transitions
     uint8_t hue = (baseHue + (int)hueShift) % 256;
     
-    // Adjust brightness based on waves and radial position
+    // FIXED: Adjust brightness based on volume - now increases with volume
     float waveBrightness = brightness * (0.7f + 0.3f * combinedWave);
     
     // Add circular pattern - brighter in center for major, brighter at edges for minor

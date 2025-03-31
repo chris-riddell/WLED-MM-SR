@@ -34,7 +34,7 @@ uint16_t mode_spectral_centroid(void) {
   uint8_t* fftData = (uint8_t*)um_data->u_data[2];
   
   // Allocate memory for centroid history and additional state variables
-  if (!SEGENV.allocateData(sizeof(float) * CENTROID_HISTORY_SIZE + sizeof(float) * 3)) {
+  if (!SEGENV.allocateData(sizeof(float) * CENTROID_HISTORY_SIZE + sizeof(float) * 3 + sizeof(uint8_t))) {
     return FRAMETIME; // Failed to allocate memory
   }
   
@@ -43,6 +43,7 @@ uint16_t mode_spectral_centroid(void) {
   float* smoothedCentroid = reinterpret_cast<float*>(SEGENV.data + sizeof(float) * CENTROID_HISTORY_SIZE);
   float* prevVolume = smoothedCentroid + 1;
   float* effectIntensity = prevVolume + 1;
+  uint8_t* paletteOffset = reinterpret_cast<uint8_t*>(SEGENV.data + sizeof(float) * CENTROID_HISTORY_SIZE + sizeof(float) * 3);
   
   // Initialize on first call
   if (SEGENV.call == 0) {
@@ -57,18 +58,43 @@ uint16_t mode_spectral_centroid(void) {
     *smoothedCentroid = 0.5f;
     *prevVolume = 0;
     *effectIntensity = 0;
+    *paletteOffset = 0; // Initialize palette offset
   }
   
   // Speed controls effect responsiveness and animation speed
-  float responsiveness = map_float(SEGMENT.speed, 0, 255, 0.01f, 0.3f);  // Significantly expanded from 0.01f-0.2f
-  float animationSpeed = map_float(SEGMENT.speed, 0, 255, 0.3f, 4.0f);   // Wider range from 0.5f-3.0f
+  float responsiveness = map_float(SEGMENT.speed, 0, 255, 0.01f, 0.4f);  // Expanded range for more responsiveness
+  float animationSpeed = map_float(SEGMENT.speed, 0, 255, 0.5f, 8.0f);   // Wider range for more visible speed control
   
-  // Intensity controls "calmness" - higher value = more calm, gradual transitions
-  float calmness = map_float(SEGMENT.intensity, 0, 255, 0.2f, 1.5f);
-  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 30.0f, 120.0f);  // Upper limit increased
+  // Intensity now controls the intensity of color shifts and effect animations
+  float colorIntensity = map_float(SEGMENT.intensity, 0, 255, 0.5f, 3.0f);
   
-  // Update color offset for animation
-  SEGENV.aux0 = (SEGENV.aux0 + 1) % 256;
+  // Custom1 now used for calmness/fade rate control to make it more effective
+  float calmness = map_float(SEGMENT.custom1, 0, 255, 0.1f, 2.0f);
+  float volumeThreshold = map_float(SEGMENT.custom1, 0, 255, 20.0f, 100.0f);  
+  
+  // Custom2 controls how much of the palette we use
+  float paletteRange = map_float(SEGMENT.custom2, 0, 255, 0.25f, 1.0f);  // How much of the palette to cycle through
+  
+  // Update palette offset for continuous color cycling
+  // The more volume and higher the centroid (treble), the faster the palette cycles
+  float cycleSpeed = animationSpeed * 0.5f;
+  if (volume > volumeThreshold) {
+    // Volume-reactive palette cycling
+    float volumeFactor = constrain((volume - volumeThreshold) / (255.0f - volumeThreshold), 0.0f, 1.0f);
+    cycleSpeed += volumeFactor * animationSpeed * 0.5f;
+    
+    // Centroid affects cycle direction and speed
+    if (*smoothedCentroid > 0.5f) {
+      // Higher frequencies cause forward cycling (treble)
+      *paletteOffset = (*paletteOffset + (uint8_t)(cycleSpeed)) % 256;
+    } else {
+      // Lower frequencies cause reverse cycling (bass)
+      *paletteOffset = (*paletteOffset - (uint8_t)(cycleSpeed)) % 256;
+    }
+  } else {
+    // Continue cycling at base speed when volume is low
+    *paletteOffset = (*paletteOffset + (uint8_t)(cycleSpeed * 0.25f)) % 256;
+  }
   
   // Only update centroid if volume is sufficient
   static uint8_t historyIndex = 0;
@@ -79,7 +105,7 @@ uint16_t mode_spectral_centroid(void) {
     
     // Apply a bit of hysteresis to prevent rapid fluctuations
     float centroidDiff = abs(centroid - centroidHistory[historyIndex]);
-    if (centroidDiff > 0.05f) {
+    if (centroidDiff > 0.05f / calmness) {  // More sensitive with lower calmness
       // Only update if change is significant
       centroidHistory[historyIndex] = centroid;
       historyIndex = (historyIndex + 1) % CENTROID_HISTORY_SIZE;
@@ -101,9 +127,10 @@ uint16_t mode_spectral_centroid(void) {
   }
   avgCentroid /= totalWeight;
   
-  // Smooth the centroid transition
-  *smoothedCentroid = *smoothedCentroid * (1.0f - responsiveness * calmness) + 
-                     avgCentroid * responsiveness * calmness;
+  // Smooth the centroid transition - directly use calmness to control fade rate
+  // Lower calmness (lower custom1) = faster response
+  *smoothedCentroid = *smoothedCentroid * (1.0f - responsiveness / calmness) + 
+                     avgCentroid * responsiveness / calmness;
   
   // Detect volume changes for effect intensity
   float volumeChange = abs(volume - *prevVolume);
@@ -112,9 +139,9 @@ uint16_t mode_spectral_centroid(void) {
   // Update effect intensity based on volume changes
   if (volumeChange > 5.0f && volume > volumeThreshold) {
     // Increase effect intensity on significant volume changes
-    *effectIntensity = min(1.0f, *effectIntensity + volumeChange / 100.0f);
+    *effectIntensity = min(1.0f, *effectIntensity + volumeChange / (100.0f / colorIntensity));
   } else {
-    // Decay effect intensity
+    // Decay effect intensity - fade rate directly affected by calmness
     *effectIntensity = max(0.0f, *effectIntensity - 0.01f * calmness);
   }
   
@@ -122,8 +149,6 @@ uint16_t mode_spectral_centroid(void) {
   uint32_t now = millis();
   
   // Map spectral centroid to color temperature
-  // Lower centroid (more bass) = cool/blue colors
-  // Higher centroid (more treble) = warm/orange colors
   uint8_t warmth = 255 * *smoothedCentroid;  // 0 = cool, 255 = warm
   
   // Use smoothed centroid to determine color distribution in a circular pattern
@@ -141,10 +166,30 @@ uint16_t mode_spectral_centroid(void) {
     uint32_t color;
     
     if (SEGMENT.palette) {
-      // Use palette if specified, with position controlled by warmth
-      // Add circular wave pattern based on angle and animation time
+      // Use palette if specified, with enhanced cycling
+      // Basic cyclic position in palette based on LED position and base offset
+      uint8_t baseIndex = (i * 256 / SEGLEN) % 256;
+      
+      // Add wave pattern based on angle, animation time, and centroid
       float wave = sin(angle * 3 + now / (1000.0f / animationSpeed));
-      uint8_t index = (warmth + (int)(wave * 30 * *effectIntensity)) % 256;
+      
+      // Calculate overall palette index with expanded range 
+      uint16_t rawIndex = *paletteOffset;
+      
+      // Add position-based component for spatial variation - scaled by palette range
+      rawIndex += baseIndex * paletteRange;
+      
+      // Add wave component that's affected by effect intensity
+      rawIndex += (int)(wave * 30 * *effectIntensity * colorIntensity);
+      
+      // Add centroid-based offset for frequency response
+      // Lower frequencies shift palette more dramatically  
+      if (*smoothedCentroid < 0.5f) {
+        float bassEffect = (0.5f - *smoothedCentroid) * 2.0f;
+        rawIndex += (uint16_t)(bassEffect * 128 * colorIntensity * *effectIntensity);
+      }
+      
+      uint8_t index = rawIndex % 256;
       color = SEGMENT.color_from_palette(index, false, PALETTE_SOLID_WRAP, 0);
     } else {
       // Generate color temperature directly
@@ -169,10 +214,10 @@ uint16_t mode_spectral_centroid(void) {
       float volumeFactor = map_float(volume, volumeThreshold, 255, 0.4f, 1.0f);
       volumeFactor = constrain(volumeFactor, 0.4f, 1.0f);
       
-      uint8_t brightness = 255 * volumeFactor / calmness;
-      r = (r * brightness) / 255;
-      g = (g * brightness) / 255;
-      b = (b * brightness) / 255;
+      uint8_t brightness = 255 * volumeFactor * colorIntensity;
+      r = min(255, (r * brightness) / 255);
+      g = min(255, (g * brightness) / 255);
+      b = min(255, (b * brightness) / 255);
       
       color = (r << 16) | (g << 8) | b;
     }
@@ -188,7 +233,7 @@ uint16_t mode_spectral_centroid(void) {
       
       // More intense center effect for bass
       if (centerDistance < 0.3f) {
-        brightnessMod += bassFactor * pulse * (1.0f - centerDistance * 3.0f) * 0.5f;
+        brightnessMod += bassFactor * pulse * (1.0f - centerDistance * 3.0f) * 0.6f * colorIntensity;
       }
     } else {
       // Treble-heavy audio: brighten outer ring
@@ -197,28 +242,28 @@ uint16_t mode_spectral_centroid(void) {
       
       // More intense edge effect for treble
       if (centerDistance > 0.7f) {
-        brightnessMod += trebleFactor * pulse * (centerDistance - 0.7f) * 3.0f * 0.5f;
+        brightnessMod += trebleFactor * pulse * (centerDistance - 0.7f) * 3.0f * 0.6f * colorIntensity;
       }
     }
     
     // Add wave effect based on effect intensity
-    float wave = sin(angle * 6 + now / (1000.0f / animationSpeed));
-    brightnessMod += wave * 0.2f * *effectIntensity;
+    float wave = sin(angle * (6 + *smoothedCentroid * 4) + now / (1000.0f / animationSpeed));
+    brightnessMod += wave * 0.25f * *effectIntensity * colorIntensity;
     
     // Apply calculated brightness modulation
     brightnessMod = constrain(brightnessMod, 0.0f, 2.0f);
     
-    uint8_t r = ((color >> 16) & 0xFF) * brightnessMod;
-    uint8_t g = ((color >> 8) & 0xFF) * brightnessMod;
-    uint8_t b = (color & 0xFF) * brightnessMod;
+    uint8_t r = min(255, (int)(((color >> 16) & 0xFF) * brightnessMod));
+    uint8_t g = min(255, (int)(((color >> 8) & 0xFF) * brightnessMod));
+    uint8_t b = min(255, (int)((color & 0xFF) * brightnessMod));
     
     SEGMENT.setPixelColor(i, r, g, b);
   }
   
   // Debug output
   if (CENTROID_DEBUG && SEGENV.call % 32 == 0) {
-    Serial.printf("EXP-SPECTRAL-CENTROID: Vol=%.1f Centroid=%.2f SmoothCent=%.2f Effect=%.2f Calm=%.2f\n",
-      volume, avgCentroid, *smoothedCentroid, *effectIntensity, calmness);
+    Serial.printf("EXP-SPECTRAL-CENTROID: Vol=%.1f Centroid=%.2f SmoothCent=%.2f Effect=%.2f PalOffset=%d\n",
+      volume, avgCentroid, *smoothedCentroid, *effectIntensity, *paletteOffset);
   }
   
   return FRAMETIME;

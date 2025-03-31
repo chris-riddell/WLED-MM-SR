@@ -349,7 +349,9 @@ bool strip_uses_global_leds(void) __attribute__((pure));  // WLEDMM implemented 
 #define FX_MODE_SPECTRAL_FLUX            207 // WLED-SR audioreactive spectral flux
 #define FX_MODE_BASS_DROP                208 // Bass drop visualization - audio
 #define FX_MODE_PLINTH                   209 // WLED-SR audioreactive plinth
-#define MODE_COUNT                       210
+#define FX_MODE_NOISEMETER_134           210 // WLED-SR audioreactive volume ripples
+#define FX_MODE_SPEC_FLUX_FIRENIGHT       211 // WLED-SR audioreactive spectral flux firenight
+#define MODE_COUNT                       212
 
 typedef enum mapping1D2D {
   M12_Pixels = 0,
@@ -1152,6 +1154,8 @@ uint16_t mode_noisemeter_og(void);
 uint16_t mode_multi_comet_134(void);
 uint16_t mode_fft_spectrum_ar(void);
 uint16_t mode_plinth(void);
+uint16_t mode_noisemeter_134(void);
+uint16_t mode_spec_flux_firenight(void);
 
 // Audio reactive effects
 uint16_t mode_volume_ripples(void);

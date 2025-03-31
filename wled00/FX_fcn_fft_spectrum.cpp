@@ -13,8 +13,8 @@
 #define FADE_RATE_MIN 2         // Minimum fade rate (faster)
 #define FADE_RATE_MAX 10        // Maximum fade rate (slower)
 // IMPROVED: Much slower fade rates for spectrum visualization
-#define SPECTRUM_FADE_RATE_MIN 0.97f   // Faster fade at minimum speed (was 0.99f)
-#define SPECTRUM_FADE_RATE_MAX 0.9975f // Ultra-slow fade at maximum speed (was 0.998f)
+#define SPECTRUM_FADE_RATE_MIN 0.98f   // Faster fade at minimum speed (was 0.97f)
+#define SPECTRUM_FADE_RATE_MAX 0.999f // Ultra-slow fade at maximum speed (was 0.9975f)
 #define SPECTRUM_MIN_THRESHOLD 30.0f   // Minimum threshold for spectrum display
 #define COLOR_SPEED_MIN 1       // Minimum color change speed
 #define COLOR_SPEED_MAX 5       // Maximum color change speed
@@ -26,19 +26,21 @@
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
 
 // Frequency weighting factors (weights sum to 1.0)
-// Gives more LEDs to bass (0-3) and mid (4-9) frequencies
+// ENHANCED: Redistributed to give more space to mid and high frequencies
+// Original weights: Bass: 37%, Mid: 36%, High: 27%
+// New weights: Bass: 35%, Mid: 38%, High: 27% (higher frequency bins use more LEDs)
 const float FREQ_WEIGHTS[] = {
-  0.10f, 0.10f, 0.09f, 0.08f,  // Bass (0-3): 37% total
-  0.07f, 0.07f, 0.06f, 0.06f, 0.05f, 0.05f,  // Mid (4-9): 36% total
-  0.04f, 0.04f, 0.04f, 0.03f, 0.03f, 0.03f   // High (10-15): 27% total
+  0.10f, 0.09f, 0.08f, 0.08f,  // Bass (0-3): 35% total
+  0.07f, 0.07f, 0.06f, 0.06f, 0.06f, 0.06f,  // Mid (4-9): 38% total
+  0.05f, 0.05f, 0.05f, 0.04f, 0.04f, 0.04f   // High (10-15): 27% total
 };
 
 // Frequency sensitivity compensation - higher bins need more boost
-// These values multiply the raw FFT values to compensate for natural bias
+// ENHANCED: More aggressive compensation for higher frequencies
 const float FREQ_COMPENSATION[] = {
   0.6f, 0.7f, 0.8f, 0.9f,      // Reduce bass sensitivity
   1.0f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f,  // Normal/boosted mids
-  1.7f, 1.9f, 2.1f, 2.3f, 2.5f, 2.8f   // Significantly boost highs
+  2.0f, 2.4f, 2.8f, 3.2f, 3.6f, 4.0f   // FURTHER BOOSTED highs (index 10-15)
 };
 
 // Helper function for float mapping
@@ -96,12 +98,34 @@ uint16_t mode_fft_spectrum_ar(void) {
     SEGENV.aux0 = 0;  // Color movement counter
   }
   
+  // Always update color movement counter, even when quiet, for background animation
+  uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, COLOR_SPEED_MIN, COLOR_SPEED_MAX);
+  SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 256;
+  uint8_t baseColorIndex = SEGENV.aux0;
+  
   // Check if overall volume is above minimum threshold
   if (volumeSmth < MIN_VOLUME_THRESHOLD) {
-    // Apply fade to all pixels but don't add new ones when volume is too low
+    // Volume is too low: Fade towards a dim background instead of black
+    uint32_t dimColor = SEGMENT.color_from_palette(baseColorIndex, true, PALETTE_SOLID_WRAP, 0); // Use palette color
+    uint8_t dimLevel = 10; // Very dim level (out of 255)
+
+    // Extract dim RGB
+    uint8_t rDim = ((dimColor >> 16) & 0xFF) * dimLevel / 255;
+    uint8_t gDim = ((dimColor >> 8) & 0xFF) * dimLevel / 255;
+    uint8_t bDim = (dimColor & 0xFF) * dimLevel / 255;
+    uint32_t targetDimColor = RGBW32(rDim, gDim, bDim, 0);
+
+    // Fade each pixel towards the dim color
     for (int i = 0; i < SEGLEN; i++) {
-      SEGMENT.fadePixelColor(i, FADE_RATE_MAX);  // Fast fade when below threshold
+      uint32_t currentColor = SEGMENT.getPixelColor(i);
+      uint32_t fadedColor = color_blend(currentColor, targetDimColor, FADE_RATE_MAX);
+      SEGMENT.setPixelColor(i, fadedColor);
     }
+    
+    // Reset heights and peaks when volume is low to prevent lingering artifacts
+    memset(heights, 0, sizeof(uint16_t) * NUM_FFT_BINS);
+    memset(peaks, 0, sizeof(uint16_t) * NUM_FFT_BINS);
+    memset(peakAges, 0, sizeof(uint8_t) * NUM_FFT_BINS);
     
     if (shouldDebug) {
       Serial.printf("FFT-SPECTRUM: Volume too low: %.1f < %.1f\n", volumeSmth, MIN_VOLUME_THRESHOLD);
@@ -112,7 +136,6 @@ uint16_t mode_fft_spectrum_ar(void) {
 
   // IMPROVED: Speed controls color change rate and fade rate
   // Higher speed value = SLOWER fade, for better persistence of visualization
-  uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, COLOR_SPEED_MIN, COLOR_SPEED_MAX);
   
   // IMPROVED: Exponential mapping for fade rate to get much slower fades at high speeds
   // At speed=0: fade is faster (0.97f)
@@ -136,36 +159,57 @@ uint16_t mode_fft_spectrum_ar(void) {
   
   // Sensitivity affects threshold scaling
   // Higher intensity = MORE sensitivity (lower threshold)
-  float sensitivityFactor = map_float(SEGMENT.intensity, 0, 255, 1.5f, 0.5f);
+  float sensitivityFactor = map_float(SEGMENT.intensity, 0, 255, 1.6f, 0.4f);
   uint8_t baseThreshold = MIN_THRESHOLD * sensitivityFactor;
-  
-  // Update color movement counter
-  SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 256;
-  uint8_t baseColorIndex = SEGENV.aux0;
   
   // Create section boundaries based on weighted distribution
   int sectionBoundaries[NUM_FFT_BINS + 1];
   sectionBoundaries[0] = 0;
   float totalLEDs = 0;
   
+  // ENHANCED: Now using 14 instead of 16 frequency bins for display
+  // This drops the highest 2 bins which often have little energy and creates dead space
+  const int DISPLAY_BINS = 14; // Drop the last 2 bins
+  
+  // Calculate total weight for the bins we'll actually use
+  float usedWeightsSum = 0;
+  for (int i = 0; i < DISPLAY_BINS; i++) {
+    int reverseIndex = DISPLAY_BINS - 1 - i;
+    usedWeightsSum += FREQ_WEIGHTS[reverseIndex];
+  }
+  
   // MODIFIED: For mandala configuration, we want to map frequencies from center outward
   // Reverse the order of bin mapping so bass (low index) is at center (low LED index)
   // and treble (high index) is at edge (high LED index)
-  for (int i = 0; i < NUM_FFT_BINS; i++) {
+  for (int i = 0; i < DISPLAY_BINS; i++) {
     // Use reverse index to put low frequencies at center
-    int reversedIndex = NUM_FFT_BINS - 1 - i;
-    totalLEDs += FREQ_WEIGHTS[reversedIndex] * SEGLEN;
+    int reverseIndex = DISPLAY_BINS - 1 - i;
+    
+    // Normalize the weight to ensure we use the full strip
+    float normalizedWeight = FREQ_WEIGHTS[reverseIndex] / usedWeightsSum;
+    totalLEDs += normalizedWeight * SEGLEN;
+    
     sectionBoundaries[i + 1] = round(totalLEDs);
   }
   
-  // Adjust the last boundary to ensure we cover the entire strip
-  sectionBoundaries[NUM_FFT_BINS] = SEGLEN;
+  // Ensure the last boundary exactly matches the segment length
+  sectionBoundaries[DISPLAY_BINS] = SEGLEN;
   
-  // Clear the display for redrawing
-  SEGMENT.fill(BLACK);
+  // Fade existing pixels slightly to allow for background animation or dimming
+  uint32_t dimColor = SEGMENT.color_from_palette(baseColorIndex, true, PALETTE_SOLID_WRAP, 0); // Use palette color
+  uint8_t dimLevel = 5; // Very dim level for background
+  uint8_t rDim = ((dimColor >> 16) & 0xFF) * dimLevel / 255;
+  uint8_t gDim = ((dimColor >> 8) & 0xFF) * dimLevel / 255;
+  uint8_t bDim = (dimColor & 0xFF) * dimLevel / 255;
+  uint32_t targetBgColor = RGBW32(rDim, gDim, bDim, 0);
+
+  for(int i=0; i<SEGLEN; i++) {
+    uint32_t current = SEGMENT.getPixelColor(i);
+    SEGMENT.setPixelColor(i, color_blend(current, targetBgColor, FADE_RATE_MAX + 5)); // Fade slightly faster than volume fade
+  }
   
   // Calculate bar heights from FFT data and handle peaks
-  for (uint16_t i = 0; i < NUM_FFT_BINS; i++) {
+  for (uint16_t i = 0; i < DISPLAY_BINS; i++) {
     // Get the FFT bin value 
     uint8_t fftBin = fftResult[i];
     
@@ -200,7 +244,7 @@ uint16_t mode_fft_spectrum_ar(void) {
     
     // Get section boundaries for this frequency bin
     // Use reverse mapping to put bass at center
-    int reverseIndex = NUM_FFT_BINS - 1 - i;
+    int reverseIndex = DISPLAY_BINS - 1 - i;
     int startPos = sectionBoundaries[reverseIndex];
     int endPos = sectionBoundaries[reverseIndex + 1] - 1;
     int sectionWidth = endPos - startPos + 1;
@@ -232,10 +276,29 @@ uint16_t mode_fft_spectrum_ar(void) {
         float brightnessFactor = (j + 1) / (float)sectionWidth;
         brightnessFactor = 0.7f + 0.3f * brightnessFactor;  // Range 0.7-1.0
         
+        // ENHANCED: For higher bins, boost brightness to make them more visible
+        if (i >= DISPLAY_BINS/2) {
+          // Gradually increase brightness for higher frequency bins
+          float binBoost = map_float(i, DISPLAY_BINS/2, DISPLAY_BINS-1, 1.0f, 1.3f);
+          brightnessFactor *= binBoost;
+          brightnessFactor = min(brightnessFactor, 1.3f); // Cap at 1.3
+        }
+        
+        // ADDITIVE BLENDING: Add new bar color to existing background
+        uint32_t existingColor = SEGMENT.getPixelColor(pos);
+        uint8_t rExist = (existingColor >> 16) & 0xFF;
+        uint8_t gExist = (existingColor >> 8) & 0xFF;
+        uint8_t bExist = existingColor & 0xFF;
+
         // Apply brightness scaling
-        uint8_t r = ((color >> 16) & 0xFF) * brightnessFactor;
-        uint8_t g = ((color >> 8) & 0xFF) * brightnessFactor;
-        uint8_t b = (color & 0xFF) * brightnessFactor;
+        uint8_t r = min(255, (int)(((color >> 16) & 0xFF) * brightnessFactor));
+        uint8_t g = min(255, (int)(((color >> 8) & 0xFF) * brightnessFactor));
+        uint8_t b = min(255, (int)((color & 0xFF) * brightnessFactor));
+        
+        // Combine with existing color
+        r = qadd8(r, rExist);
+        g = qadd8(g, gExist);
+        b = qadd8(b, bExist);
         
         SEGMENT.setPixelColor(pos, r, g, b);
       }
@@ -248,9 +311,10 @@ uint16_t mode_fft_spectrum_ar(void) {
           uint32_t baseColor = SEGMENT.getPixelColor(peakPos);
           
           // Make peak brighter than the bar
-          uint8_t r = (uint8_t)min(255.0f, ((baseColor >> 16) & 0xFF) * 1.7f);
-          uint8_t g = (uint8_t)min(255.0f, ((baseColor >> 8) & 0xFF) * 1.7f);
-          uint8_t b = (uint8_t)min(255.0f, (baseColor & 0xFF) * 1.7f);
+          // ENHANCED: Make peaks even more visible with higher contrast
+          uint8_t r = min(255, (int)(((baseColor >> 16) & 0xFF) * 1.8f));
+          uint8_t g = min(255, (int)(((baseColor >> 8) & 0xFF) * 1.8f));
+          uint8_t b = min(255, (int)((baseColor & 0xFF) * 1.8f));
           
           SEGMENT.setPixelColor(peakPos, r, g, b);
         }
@@ -259,8 +323,8 @@ uint16_t mode_fft_spectrum_ar(void) {
   }
   
   if (shouldDebug) {
-    Serial.printf("EXP-FFT-SPECTRUM: Vol=%.1f Speed=%d FadeRate=%.6f Custom1=%d Custom2=%d PeakHold=%d\n",
-                 volumeSmth, SEGMENT.speed, fadeRate, SEGMENT.custom1, SEGMENT.custom2, peakHoldTime);
+    Serial.printf("EXP-FFT-SPECTRUM: Vol=%.1f Speed=%d FadeRate=%.6f Custom1=%d Custom2=%d PeakHold=%d UsedBins=%d\n",
+                 volumeSmth, SEGMENT.speed, fadeRate, SEGMENT.custom1, SEGMENT.custom2, peakHoldTime, DISPLAY_BINS);
   }
   
   return FRAMETIME;

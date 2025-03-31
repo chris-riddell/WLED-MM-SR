@@ -86,7 +86,7 @@ uint16_t mode_noisemeter_og(void) {
   relativeVolume = constrain(relativeVolume, 0.0f, 1.0f);
   
   // Calculate fade rate based on speed
-  uint8_t fadeRate = map(SEGMENT.speed, 0, 255, 200, 254);
+  uint8_t fadeRate = map(SEGMENT.speed, 0, 255, 220, 254);
   
   // Fade all pixels to black
   for(int i = 0; i < SEGLEN; i++) {
@@ -104,20 +104,20 @@ uint16_t mode_noisemeter_og(void) {
   }
 
   // Calculate active pixel position based on volume
-  float tmpSound2 = volumeSmth * 2.0f * (float)SEGMENT.intensity / 255.0f;
+  float tmpSound2 = volumeSmth * 2.0f;
   int maxLen = map_float(tmpSound2, 0, 255, 0, SEGLEN);
   maxLen = constrain(maxLen, 0, SEGLEN);
 
-  // Set active pixels with color from palette and apply opacity
+  // Set active pixels with color from palette and apply opacity AND intensity
   for (int i = 0; i < maxLen; i++) {
     uint8_t index = inoise8(i*volumeSmth+SEGENV.aux0, SEGENV.aux1+i*volumeSmth);
     uint32_t color = SEGMENT.color_from_palette(index, false, PALETTE_SOLID_WRAP, 0);
     
-    // Apply segment opacity
-    uint8_t opacity = SEGMENT.opacity;
-    uint8_t r = ((color >> 16) & 0xFF) * opacity / 255;
-    uint8_t g = ((color >> 8) & 0xFF) * opacity / 255;
-    uint8_t b = (color & 0xFF) * opacity / 255;
+    // Apply segment opacity AND intensity
+    uint8_t brightness_scale = (uint16_t)SEGMENT.opacity * SEGMENT.intensity / 255;
+    uint8_t r = ((color >> 16) & 0xFF) * brightness_scale / 255;
+    uint8_t g = ((color >> 8) & 0xFF) * brightness_scale / 255;
+    uint8_t b = (color & 0xFF) * brightness_scale / 255;
     
     SEGMENT.setPixelColor(i, r, g, b);
   }

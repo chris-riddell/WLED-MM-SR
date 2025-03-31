@@ -7,9 +7,9 @@
 #include <cmath>
 
 // Increased time ranges for smoother transitions
-#define BUILDUP_DURATION 3000  // Maximum buildup time (3 seconds) - will be scaled by intensity/speed
-#define DROP_DURATION 4000     // Maximum drop time (4 seconds) - will be scaled by intensity/speed
-#define RECOVERY_DURATION 3000 // Maximum recovery time (3 seconds) - will be scaled by intensity/speed
+#define BUILDUP_DURATION 4000  // Increased buildup time (4 seconds)
+#define DROP_DURATION 5000     // Increased drop time (5 seconds)
+#define RECOVERY_DURATION 6000 // Increased recovery time (6 seconds) for much slower fade
 #define MIN_VOLUME_THRESHOLD 40.0f // Increased minimum threshold to prevent false triggers
 #define BASS_DROP_DEBUG 0
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
@@ -50,6 +50,7 @@ uint16_t mode_bass_drop(void) {
     uint8_t colorOffset;      // Color offset for animation
     float smoothedVolume;     // Smoothed volume
     float prevDropIntensity;  // Previous drop intensity for hysteresis
+    float smoothedIntensity; // Add smoothed intensity to reduce flicker
   };
   
   if (!SEGENV.allocateData(sizeof(DropState))) {
@@ -68,15 +69,16 @@ uint16_t mode_bass_drop(void) {
     state->colorOffset = 0;
     state->smoothedVolume = 0.0f;
     state->prevDropIntensity = 0.0f;
+    state->smoothedIntensity = 0.0f; // Initialize smoothed intensity
   }
   
   // Speed controls animation speed and transitions
-  float speedFactor = map_float(SEGMENT.speed, 0, 255, 0.3f, 4.0f);  // Significantly expanded range
+  float speedFactor = map_float(SEGMENT.speed, 0, 255, 0.2f, 4.5f);
   
   // Intensity controls "calmness" - higher value = more calm, gradual transitions
   float calmness = map_float(SEGMENT.intensity, 0, 255, 0.2f, 1.5f);
-  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 1.2f, 0.25f);  // More sensitivity range, reversed
-  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 30.0f, 120.0f);  // Upper limit increased
+  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 1.5f, 0.3f);  // Increased sensitivity range further
+  float volumeThreshold = map_float(SEGMENT.intensity, 0, 255, 25.0f, 100.0f); // Lowered volume threshold range
   
   // Get current time
   uint32_t now = millis();
@@ -96,8 +98,8 @@ uint16_t mode_bass_drop(void) {
   if (dropDiff > 0.1f || rawDropIntensity > state->prevDropIntensity) {
     // More responsive to increases, less to decreases
     if (rawDropIntensity > state->prevDropIntensity) {
-      // 70% new, 30% old - fast attack
-      dropIntensity = rawDropIntensity * 0.7f + state->prevDropIntensity * 0.3f;
+      // 80% new, 20% old - even faster attack
+      dropIntensity = rawDropIntensity * 0.8f + state->prevDropIntensity * 0.2f;
     } else {
       // 30% new, 70% old - slow decay
       dropIntensity = rawDropIntensity * 0.3f + state->prevDropIntensity * 0.7f;
@@ -117,7 +119,7 @@ uint16_t mode_bass_drop(void) {
   switch (state->state) {
     case STATE_WAITING: {
       // Waiting for buildup
-      if (dropIntensity > 0.3f && state->smoothedVolume > volumeThreshold) {
+      if (dropIntensity > 0.15f && state->smoothedVolume > volumeThreshold) {
         // Transition to buildup state
         state->state = STATE_BUILDUP;
         state->stateStartTime = now;
@@ -130,7 +132,7 @@ uint16_t mode_bass_drop(void) {
       
     case STATE_BUILDUP: {
       // During buildup
-      if (dropIntensity > 0.7f && stateElapsed > 500) {
+      if (dropIntensity > 0.55f && stateElapsed > 500) {
         // Strong drop detected, transition to drop state
         state->state = STATE_DROP;
         state->stateStartTime = now;
@@ -148,8 +150,8 @@ uint16_t mode_bass_drop(void) {
       // Update intensity during buildup - gradually increasing
       state->intensity = min(0.8f, stateElapsed / (float)scaledBuildupDuration * state->dropIntensity);
       
-      // Slow color movement during buildup
-      if (stateElapsed % 2 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
+      // Smoother color movement during buildup (slower)
+      if (stateElapsed % 4 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
       break;
     }
       
@@ -171,8 +173,8 @@ uint16_t mode_bass_drop(void) {
         state->intensity = max(0.2f, state->dropIntensity * (1.8f - dropProgress));
       }
       
-      // Fast color movement during drop
-      state->colorOffset = (state->colorOffset + 2) % 256;
+      // Smoother color movement during drop (slightly slower)
+      if (stateElapsed % 2 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
       break;
     }
       
@@ -187,8 +189,8 @@ uint16_t mode_bass_drop(void) {
       // Gradually decrease intensity during recovery
       state->intensity = max(0.0f, state->dropIntensity * (1.0f - stateElapsed / (float)scaledRecoveryDuration));
       
-      // Moderate color movement during recovery
-      if (stateElapsed % 3 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
+      // Slower color movement during recovery
+      if (stateElapsed % 5 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
       break;
     }
       
@@ -202,11 +204,19 @@ uint16_t mode_bass_drop(void) {
       // Minimal intensity during calm
       state->intensity = max(0.0f, 0.2f - (stateElapsed / 2000.0f * 0.2f));
       
-      // Slow color changes
-      if (stateElapsed % 5 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
+      // Even slower color changes during calm
+      if (stateElapsed % 8 == 0) state->colorOffset = (state->colorOffset + 1) % 256;
       break;
     }
   }
+  
+  // Smooth the intensity for rendering to reduce flicker
+  float currentIntensity = state->intensity; // Use the raw intensity for logic
+  state->smoothedIntensity = state->smoothedIntensity * 0.90f + currentIntensity * 0.10f; // Reduced smoothing slightly
+  float displayIntensity = state->smoothedIntensity;
+  
+  // Increase intensity slightly to make effect more noticeable
+  displayIntensity = min(1.0f, displayIntensity * 1.4f); // Increased visual boost
   
   // MODIFIED: Enhanced visualization optimized for mandala configuration
   // Create radial patterns that flow outward from center
@@ -215,7 +225,7 @@ uint16_t mode_bass_drop(void) {
     float distFromCenter = (float)i / SEGLEN;
     
     // Get base time factor adjusted by speed and intensity
-    uint32_t timebase = now / (10 + (5 / speedFactor));
+    uint32_t timebase = now / (15 + (8 / speedFactor));
     
     // Create different patterns based on state
     uint32_t color;
@@ -223,57 +233,58 @@ uint16_t mode_bass_drop(void) {
     
     switch (state->state) {
       case STATE_WAITING: {
-        // Subtle ambient pattern when waiting
-        // Gentle pulse from center
-        float pulse = (sin(timebase / 200.0f) + 1.0f) / 2.0f;
-        float wave = sin(distFromCenter * PI + timebase / 500.0f) * 0.5f + 0.5f;
+        // ENHANCED: More dynamic waiting pattern to show more sound reactivity
+        // Pulse from center that reacts to volume
+        float volFactor = state->smoothedVolume / 255.0f;
+        float pulse = (sin(timebase / 250.0f) + 1.0f) / 2.0f;
+        float modPulse = pulse * (0.5f + volFactor * 0.5f); // Volume modulates pulse
         
-        brightness = 0.3f + (wave * pulse * 0.2f);
-        uint8_t hue = state->colorOffset + (distFromCenter * 20);
+        // Use inverted distance to make brighter toward center
+        float invertDist = 1.0f - distFromCenter;
+        brightness = 0.3f + invertDist * 0.7f * modPulse;
+        
+        // Subtle hue rotation based on volume and distance
+        uint8_t hue = (state->colorOffset + (uint8_t)(distFromCenter * 64)) % 256;
         color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
         break;
       }
         
       case STATE_BUILDUP: {
-        // Building anticipation - waves moving outward faster as buildup increases
-        // Create accelerating waves moving outward
+        // ENHANCED: More visible buildup effect
         float buildupProgress = stateElapsed / (float)scaledBuildupDuration;
-        float waveSpeed = 300.0f + buildupProgress * 700.0f;
-        float wave = sin(distFromCenter * 5.0f * PI + timebase / (1000.0f - waveSpeed));
         
-        // Pulse brightness with increasing intensity
-        float pulse = (sin(timebase / (500.0f - 300.0f * buildupProgress)) + 1.0f) / 2.0f;
-        brightness = 0.4f + (wave * pulse * state->intensity * 0.6f);
+        // Create rippling waves that increase in frequency and brightness with buildup
+        float freq = 1.0f + buildupProgress * 4.0f; // Increasing frequency
+        float wavePhase = distFromCenter * 6.0f * freq - (timebase / (50.0f / buildupProgress));
+        float wave = (sin(wavePhase) + 1.0f) / 2.0f;
+
+        // Increasing brightness and movement with buildup
+        brightness = 0.4f + (buildupProgress * 0.6f * (0.5f + wave * 0.5f));
         
-        // Color gradually shifts during buildup
-        uint8_t hue = state->colorOffset + (distFromCenter * 30);
+        // Color shift that speeds up during buildup
+        uint8_t hueShift = buildupProgress * 85; // Greater color shift as buildup progresses
+        uint8_t hue = (state->colorOffset + (uint8_t)(distFromCenter * 128) + hueShift) % 256;
         color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
         break;
       }
         
       case STATE_DROP: {
-        // Dynamic outward flowing waves during drop
+        // ENHANCED: More dramatic drop effect
         float dropProgress = stateElapsed / (float)scaledDropDuration;
-        float baseFreq = 4.0f + state->intensity * 5.0f; // Frequency increases with intensity
         
-        // Primary wave - fast outward movement
-        float wave1 = sin(distFromCenter * baseFreq * PI - timebase / (50.0f / state->intensity));
+        // Create intense rippling waves that expand from center during drop
+        float waveSpeed = 400.0f - dropProgress * 250.0f;
+        float wavePhase = (distFromCenter * 10.0f) - (timebase / waveSpeed);
+        float wave = (sin(wavePhase) + 1.0f) / 2.0f;
         
-        // Secondary wave - slower, phase-shifted
-        float wave2 = sin(distFromCenter * (baseFreq * 0.7f) * PI - timebase / (80.0f / state->intensity) + PI/2);
+        // Pulse brightness with the beat during drop
+        float beatPulse = (sin(timebase / 130.0f) + 1.0f) / 2.0f;
+        float distEffect = state->dropIntensity * (1.0f - distFromCenter * 0.5f); // Brighter toward center
+        brightness = distEffect * (0.7f + beatPulse * 0.3f);
         
-        // Combine waves with varying influence
-        float combinedWave = (wave1 * 0.7f + wave2 * 0.3f);
-        
-        // Add radial brightness variation - center pulses brighter during drop
-        float centerEffect = (1.0f - distFromCenter) * 0.5f * (sin(timebase / 100.0f) + 1.0f);
-        
-        // Final brightness with strong center pulse
-        brightness = 0.4f + (combinedWave * 0.3f + centerEffect) * state->intensity;
-        
-        // Dynamic color movement based on drop intensity
-        uint8_t hueShift = distFromCenter * 60.0f + dropProgress * 128.0f;
-        uint8_t hue = state->colorOffset + hueShift;
+        // Dramatic color shift during drop
+        uint8_t hueOffset = (timebase / 15) % 256;
+        uint8_t hue = (state->colorOffset + hueOffset + (uint8_t)(distFromCenter * 40)) % 256;
         color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);
         break;
       }
@@ -284,7 +295,7 @@ uint16_t mode_bass_drop(void) {
         float recoveryProgress = stateElapsed / (float)scaledRecoveryDuration;
         
         // Gentle waves moving outward
-        float wave = sin(distFromCenter * 3.0f * PI - timebase / 120.0f);
+        float wave = sin(distFromCenter * 3.0f * PI - timebase / 150.0f);
         
         // Brightness fades as recovery progresses
         brightness = 0.3f + wave * (0.7f - recoveryProgress * 0.5f) * state->intensity;
@@ -300,7 +311,7 @@ uint16_t mode_bass_drop(void) {
         // Minimal animation during calm state
         // Very subtle movement
         float calmProgress = stateElapsed / 2000.0f;
-        float wave = sin(distFromCenter * PI * 2.0f + timebase / 800.0f) * 0.5f + 0.5f;
+        float wave = sin(distFromCenter * PI * 2.0f + timebase / 1000.0f) * 0.5f + 0.5f;
         
         // Low brightness that fades out
         brightness = (0.3f - calmProgress * 0.2f) * (0.7f + wave * 0.3f);

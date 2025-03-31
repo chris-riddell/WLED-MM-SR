@@ -39,7 +39,7 @@ uint16_t mode_dynamic_range(void) {
   float volume = *(float*)um_data->u_data[0];
   
   // Allocate memory for volume history and additional state variables
-  if (!SEGENV.allocateData(sizeof(float) * HISTORY_SIZE + sizeof(float) * 3)) {
+  if (!SEGENV.allocateData(sizeof(float) * HISTORY_SIZE + sizeof(float) * 4)) {
     return FRAMETIME;
   }
   
@@ -47,6 +47,7 @@ uint16_t mode_dynamic_range(void) {
   float* smoothedVolume = reinterpret_cast<float*>(SEGENV.data + sizeof(float) * HISTORY_SIZE);
   float* flashIntensity = smoothedVolume + 1;
   float* smoothedRange = flashIntensity + 1;
+  float* smoothedBrightnessFactor = smoothedRange + 1;
   
   // Initialize on first call
   if (SEGENV.call == 0) {
@@ -58,6 +59,7 @@ uint16_t mode_dynamic_range(void) {
     *smoothedVolume = volume;
     *flashIntensity = 0;
     *smoothedRange = 0;
+    *smoothedBrightnessFactor = 0.7f;
   }
   
   // IMPROVED: More gradual response to changes
@@ -117,16 +119,18 @@ uint16_t mode_dynamic_range(void) {
   prevVolume = *smoothedVolume;
   
   // IMPROVED: More controlled flash triggering
-  if (volumeChange > FLASH_THRESHOLD * maxVolume * flashSensitivity && 
+  if (volumeChange > FLASH_THRESHOLD * prevVolume * flashSensitivity && 
       *smoothedVolume > MIN_VOLUME_THRESHOLD) {
-    float newFlash = (volumeChange / maxVolume) * (1.0f / calmness);
-    *flashIntensity = constrain(newFlash, 0.0f, 0.6f); // Reduced max flash intensity
+    // ENHANCED: Increase flash intensity for more visible effect
+    float newFlash = (volumeChange / max(*smoothedVolume, 1.0f)) * (1.2f / calmness); // Increased multiplier (was 1.0f)
+    *flashIntensity = constrain(newFlash, 0.0f, 0.8f); // Increased max flash intensity (was 0.6f)
   } else {
     *flashIntensity *= 0.85f; // Gentler flash decay
   }
   
   // Calculate base color parameters
   uint8_t baseHue = SEGENV.aux0;
+  // ENHANCED: Make range visualization more prominent
   uint8_t baseSaturation = map(*smoothedRange * 255, 0, 255, MIN_SATURATION, 255);
   
   // IMPROVED: Much more conservative white blending
@@ -157,17 +161,32 @@ uint16_t mode_dynamic_range(void) {
     // Calculate hue variation based on dynamic range
     uint8_t hueOffset;
     if (*smoothedRange < 0.3f) {
-      hueOffset = 64 * distRatio + 20 * combinedWave;
+      hueOffset = 48 * distRatio + 15 * combinedWave;
     } else {
-      hueOffset = (i * 128) / SEGLEN + combinedWave * 30;
+      hueOffset = (i * 100) / SEGLEN + combinedWave * 25;
     }
     
     uint8_t hue = (baseHue + hueOffset) % 256;
     
     // Calculate brightness based on position and range
-    float brightnessFactor = 0.7f + (0.3f * (1.0f - distRatio));
-    brightnessFactor += *flashIntensity * (1.0f - distRatio * 0.7f);
-    brightnessFactor = constrain(brightnessFactor, 0.0f, 1.0f);
+    float volRatio = constrain((*smoothedVolume - MIN_VOLUME_THRESHOLD) / (200.0f - MIN_VOLUME_THRESHOLD), 0.0f, 1.0f);
+    float baseBrightness = 0.1f + volRatio * 0.5f;
+    
+    float targetBrightnessFactor = baseBrightness + (0.3f * (1.0f - distRatio) * volRatio);
+    
+    // ENHANCED: Make flash effect more prominent and react more to volume
+    float flashBoost = constrain(*flashIntensity * 1.5f, 0.0f, 1.0f);
+    targetBrightnessFactor += flashBoost * (1.0f - distRatio * 0.4f);
+    targetBrightnessFactor = constrain(targetBrightnessFactor, 0.0f, 1.0f);
+
+    // Smooth the brightness factor to reduce flicker
+    float brightnessSmoothing = 0.20f;
+    *smoothedBrightnessFactor = *smoothedBrightnessFactor * (1.0f - brightnessSmoothing) + targetBrightnessFactor * brightnessSmoothing;
+    float brightnessFactor = *smoothedBrightnessFactor;
+    
+    // ENHANCED: Add volume-based boost to brightness to make effect more reactive
+    float volumeBoost = constrain((*smoothedVolume - MIN_VOLUME_THRESHOLD) / 120.0f, 0.0f, 0.8f);
+    brightnessFactor = min(1.0f, brightnessFactor * (1.0f + volumeBoost));
     
     // Get and modify color
     uint32_t color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);

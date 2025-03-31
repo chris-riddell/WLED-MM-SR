@@ -8,10 +8,10 @@
 // Increased history size for better smoothing
 #define NUM_FFT_BINS 16
 #define FLUX_HISTORY_SIZE 16  // Increased from 12 for even smoother tracking
-#define MIN_VOLUME_THRESHOLD 40.0f    // Minimum volume to activate effect (raised)
+#define MIN_VOLUME_THRESHOLD 40.0f  // Increased from 30.0f
 #define FLUX_THRESHOLD 50.0f
-#define SPECTRAL_MIN_THRESHOLD 10.0f  // Flux required at intensity=255 (raised)
-#define SPECTRAL_MAX_THRESHOLD 35.0f  // Flux required at intensity=0 (raised)
+#define SPECTRAL_MIN_THRESHOLD 40.0f  // Increased from original value
+#define SPECTRAL_MAX_THRESHOLD 80.0f  // Increased as well
 #define FLUX_FADE_RATE 0.97f  // Slower fade rate
 #define SPECTRAL_FLUX_DEBUG 0
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
@@ -21,7 +21,7 @@
 #define MAX_COLOR_SPEED 4     // Maximum color movement speed (reduced from 6)
 #define MIN_FADE_SPEED 0.99f  // Extremely slow fade at minimum speed (was 0.97f)
 #define MAX_FADE_SPEED 0.90f  // Faster fade at maximum speed (was 0.85f)
-#define MIN_FLOW_DIVISOR 800.0f // Very slow flow at minimum speed (was 400.0f)
+#define MIN_FLOW_DIVISOR 400.0f // Very slow flow at minimum speed (was 100.0f)
 #define MAX_FLOW_DIVISOR 80.0f  // Faster flow at maximum speed
 
 // Forward declaration of helper functions
@@ -29,7 +29,7 @@ extern float map_float(float x, float in_min, float in_max, float out_min, float
 extern bool isAudioDataValid(um_data_t *um_data);
 extern bool hasFFTData(um_data_t *um_data);
 
-uint16_t mode_spectral_flux(void) {
+uint16_t mode_spec_flux_firenight(void) {
   // Get audio data
   um_data_t *um_data;
   bool hasAudio = usermods.getUMData(&um_data, USERMOD_ID_AUDIOREACTIVE);
@@ -45,20 +45,17 @@ uint16_t mode_spectral_flux(void) {
   float volume = *(float*)um_data->u_data[0];
   uint8_t* fftData = (uint8_t*)um_data->u_data[2];
   
-  // Allocate memory for flux history, previous FFT, and smoothed brightness
-  const int dataSize = sizeof(float) * FLUX_HISTORY_SIZE + sizeof(uint8_t) * NUM_FFT_BINS + sizeof(float);
+  // Allocate memory for flux history and previous FFT
+  const int dataSize = sizeof(float) * FLUX_HISTORY_SIZE + sizeof(uint8_t) * NUM_FFT_BINS;
   if (!SEGENV.allocateData(dataSize)) {
     return FRAMETIME; // Failed to allocate memory
   }
   
   // Parse the data - first FLUX_HISTORY_SIZE floats are for flux history
   float* fluxHistory = reinterpret_cast<float*>(SEGENV.data);
-  // The next space is for the previous FFT data
-  uint8_t* prevFFT = reinterpret_cast<uint8_t*>(fluxHistory) + sizeof(float) * FLUX_HISTORY_SIZE;
-  // Store smoothed brightness at the end
-  float* smoothedBrightness = reinterpret_cast<float*>(prevFFT + sizeof(uint8_t) * NUM_FFT_BINS);
-  // ADD state for smoothed flux to control dynamic speed
-  float* smoothedFlux = smoothedBrightness + 1;
+  
+  // The remaining space is for the previous FFT data
+  uint8_t* prevFFT = reinterpret_cast<uint8_t*>(SEGENV.data) + sizeof(float) * FLUX_HISTORY_SIZE;
   
   // Initialize on first call
   if (SEGENV.call == 0) {
@@ -75,28 +72,22 @@ uint16_t mode_spectral_flux(void) {
     for (int i = 0; i < NUM_FFT_BINS; i++) {
       prevFFT[i] = 0;
     }
-    *smoothedBrightness = 64.0f; // Initial brightness
-    *smoothedFlux = 0.0f; // Initial smoothed flux
   }
   
   // IMPROVED: Speed more dramatically controls all animation rates
   // Much slower at low settings, still responsive at high settings
   uint8_t colorSpeed = map(SEGMENT.speed, 0, 255, MIN_COLOR_SPEED, MAX_COLOR_SPEED);
-  // Expanded fade speed range (even slower at low end)
-  float fadeSpeed = map_float(SEGMENT.speed, 0, 255, 0.995f, 0.90f);
-  // Expanded flow divisor range (even slower at low end)
-  float flowDivisor = map_float(SEGMENT.speed, 0, 255, 1200.0f, 80.0f);
+  float fadeSpeed = map_float(SEGMENT.speed, 0, 255, MIN_FADE_SPEED, MAX_FADE_SPEED);
+  float flowDivisor = map_float(SEGMENT.speed, 0, 255, MIN_FLOW_DIVISOR, MAX_FLOW_DIVISOR);
   
-  // Drastically reduced sensitivity range
-  float mappedIntensity = map_float(SEGMENT.intensity, 0, 255, 0.0f, 1.0f);
-  float sensitivity = 0.1f + sqrt(mappedIntensity) * 0.4f; // Range 0.1 to 0.5, but smoother at low end
-  
-  // Map intensity to the defined threshold range
+  // Intensity now truly controls "sensitivity" to flux
+  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 0.4f, 1.5f);  // More moderate range
   float fluxThreshold = map_float(SEGMENT.intensity, 0, 255, SPECTRAL_MAX_THRESHOLD, SPECTRAL_MIN_THRESHOLD);
   
   // IMPROVED: Only update color movement every N frames based on speed
-  uint8_t frameSkip = map(SEGMENT.speed, 0, 255, 5, 1); // Update less often at low speeds
-  if (SEGENV.call % frameSkip == 0) {
+  // At lowest speed, update every 4 frames, at highest speed, every frame
+  uint8_t updateRate = map(SEGMENT.speed, 0, 255, 4, 1);
+  if (SEGENV.call % updateRate == 0) {
     SEGENV.aux0 = (SEGENV.aux0 + colorSpeed) % 256;
   }
   
@@ -144,20 +135,8 @@ uint16_t mode_spectral_flux(void) {
   avgFlux /= totalWeight;
   recentFlux /= 3;
   
-  // Smooth the average flux for dynamic speed control
-  float fluxSmoothing = 0.1f;
-  *smoothedFlux = *smoothedFlux * (1.0f - fluxSmoothing) + avgFlux * fluxSmoothing;
-  
   // Detect significant spectral flux (sonic transitions)
   bool fluxEvent = recentFlux > fluxThreshold;
-  
-  // DYNAMIC SPEED ADJUSTMENT based on smoothed flux
-  // Map smoothed flux (expected range ~0 to 1000+) to a speed multiplier (1.0 to ~3.0)
-  float dynamicSpeedMultiplier = 1.0f + constrain(*smoothedFlux / 2000.0f, 0.0f, 0.3f);
-  
-  // Apply dynamic multiplier to animation speeds
-  float dynamicFlowDivisor = flowDivisor / dynamicSpeedMultiplier;
-  uint8_t dynamicColorSpeed = constrain(colorSpeed * dynamicSpeedMultiplier, MIN_COLOR_SPEED, MAX_COLOR_SPEED * 1.5f);
   
   // IMPROVED: Need sustained flux for direction change with speed-dependent timing
   static uint32_t lastDirectionChange = 0;
@@ -188,15 +167,14 @@ uint16_t mode_spectral_flux(void) {
     lastFluxEvent = now;
   } else {
     // IMPROVED: Speed-dependent decay - much slower at low speeds
-    // Fade speed now directly controls the decay rate of the event intensity
-    // Lower fadeSpeed (higher Speed slider) makes intensity decay faster
-    fluxEventIntensity *= fadeSpeed;
+    // Apply fade speed directly to the decay rate
+    fluxEventIntensity *= fadeSpeed + (sensitivity * 0.015f);
   }
   
   // Apply spectral flux visualization optimized for circular display
   for (int i = 0; i < SEGLEN; i++) {
     // Base color moves slowly
-    uint8_t baseHue = (SEGENV.aux0 + (uint8_t)(now / 100 * dynamicColorSpeed)) % 256;
+    uint8_t baseHue = SEGENV.aux0;
     
     // For circular display, calculate position relative to center
     // Distance from center (0.0 = center, 1.0 = edge)
@@ -210,49 +188,40 @@ uint16_t mode_spectral_flux(void) {
     
     // IMPROVED: Create flowing pattern with speed-dependent flow rate
     float flowDirection = SEGENV.aux1 ? -1.0f : 1.0f;
-    float flowOffset = (now / dynamicFlowDivisor) * flowDirection;
+    float flowOffset = (now / flowDivisor) * flowDirection;
     float flowPosition = fmod(centerDistance * 3.0f + flowOffset, 2.0f);
     if (flowPosition > 1.0f) flowPosition = 2.0f - flowPosition;  // Triangle wave
     
     // Modify hue based on flow position and flux events, with sensitivity factor
-    float hueShift = (flowPosition * 128) + (fluxEventIntensity * 10 / sensitivity);
+    float hueShift = (flowPosition * 128) + (fluxEventIntensity * 85 / sensitivity);
     uint8_t hue = (int)(baseHue + hueShift) % 256;
     
     // Calculate brightness based on flux, with sensitivity dampening
     uint8_t brightness;
-    float targetBrightness = 0.0f; // Declare at higher scope to be accessible in both if/else branches
     
     if (fluxEventIntensity > 0.1f) {
       // IMPROVED: Speed-dependent wave frequency - slower at low speeds
-      float waveSpeed = map_float(SEGMENT.speed, 0, 255, 400.0f, 120.0f) * sensitivity / dynamicSpeedMultiplier;
+      float waveSpeed = map_float(SEGMENT.speed, 0, 255, 400.0f, 120.0f) * sensitivity;
       float wave = sin(centerDistance * TWO_PI * 2 + now / waveSpeed);
       
       // Scale volume impact by sensitivity
-      float volumeBrightness = map_float(volume, MIN_VOLUME_THRESHOLD, 255, 0.08f, 0.3f);
+      float volumeBrightness = map_float(volume, MIN_VOLUME_THRESHOLD, 255, 0.25f, 1.0f);
       volumeBrightness = constrain(volumeBrightness, 0.25f, 1.0f);
       
-      // Calculate target brightness (unsmoothed)
-      // Reduced base brightness and volume scaling factor
-      targetBrightness = 30 + volumeBrightness * 150 * (0.8f + 0.2f * wave) / sensitivity;
+      // Calculate final brightness with sensitivity and speed factors
+      brightness = 64 + volumeBrightness * 191 * (0.8f + 0.2f * wave) / sensitivity;
       
       // IMPROVED: Speed-dependent flash effect - subtler at low speeds
-      float flashIntensity = map_float(SEGMENT.speed, 0, 255, 0.03f, 0.10f);
+      float flashIntensity = map_float(SEGMENT.speed, 0, 255, 0.15f, 0.3f);
       if (fluxEventIntensity > 0.7f) {
-        targetBrightness = targetBrightness * (1.0f + fluxEventIntensity * flashIntensity / sensitivity);
+        brightness = brightness * (1.0f + fluxEventIntensity * flashIntensity / sensitivity);
       }
     } else {
       // Normal brightness when no flux events
-      float volumeBrightness = map_float(volume, MIN_VOLUME_THRESHOLD, 255, 0.08f, 0.3f);
+      float volumeBrightness = map_float(volume, MIN_VOLUME_THRESHOLD, 255, 0.25f, 1.0f);
       volumeBrightness = constrain(volumeBrightness, 0.25f, 1.0f);
-      // Reduced base brightness and volume scaling factor
-      targetBrightness = 30 + volumeBrightness * 150 / sensitivity;
+      brightness = 64 + volumeBrightness * 191 / sensitivity;
     }
-    
-    // Smooth the brightness value to reduce flicker
-    // Higher fadeSpeed (lower Speed slider) leads to slower brightness smoothing (more averaging)
-    float brightnessSmoothingFactor = map_float(fadeSpeed, MAX_FADE_SPEED, MIN_FADE_SPEED, 0.08f, 0.30f);
-    *smoothedBrightness = *smoothedBrightness * (1.0f - brightnessSmoothingFactor) + targetBrightness * brightnessSmoothingFactor;
-    brightness = constrain(*smoothedBrightness, 0, 255);
     
     // Get color from palette
     uint32_t color = SEGMENT.color_from_palette(hue, false, PALETTE_SOLID_WRAP, 0);

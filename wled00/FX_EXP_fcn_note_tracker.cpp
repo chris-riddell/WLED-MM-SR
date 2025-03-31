@@ -8,16 +8,16 @@
 #include <algorithm>  // for std::min
 
 #define MAX_NOTES 12  // C, C#, D, D#, E, F, F#, G, G#, A, A#, B
-#define NOTE_HISTORY_SIZE 6  // Reduced from 8 for faster response
-#define MIN_VOLUME_THRESHOLD 25.0f  // Further reduced threshold
+#define NOTE_HISTORY_SIZE 4  // Reduced from 6 for faster response
+#define MIN_VOLUME_THRESHOLD 20.0f  // Further reduced threshold for better detection
 #define NOTE_TRACKER_DEBUG 0  // Setting debug flag to 0
 #define PALETTE_SOLID_WRAP (strip.paletteBlend == 1 || strip.paletteBlend == 3)
 
 // Animation constants
-#define MIN_FADE_RATE 0.75f   // Faster fade
-#define MAX_FADE_RATE 0.50f   // Even faster fade at high speeds
+#define MIN_FADE_RATE 0.85f   // Slower fade for longer trails
+#define MAX_FADE_RATE 0.60f   // Faster fade at high speeds
 #define MIN_MOVE_SPEED 1      // Minimum movement speed
-#define MAX_MOVE_SPEED 4      // Maximum movement speed
+#define MAX_MOVE_SPEED 5      // Increased maximum movement speed
 #define NOTE_DISPLAY_MODE_FIXED 0    // Fixed note positions
 #define NOTE_DISPLAY_MODE_CIRCULAR 1  // Circular/moving notes
 
@@ -73,7 +73,7 @@ int findClosestNote(float frequency) {
   }
   
   // More lenient threshold for note detection
-  if (minDiff > 25.0f) return -1;  // Increased from 20.0f
+  if (minDiff > 30.0f) return -1;  // Increased from 25.0f for even more leniency
   return closestNote;
 }
 
@@ -125,8 +125,8 @@ uint16_t mode_note_tracker(void) {
   // Map controls with improved ranges
   float fadeRate = map_float(SEGMENT.speed, 0, 255, MIN_FADE_RATE, MAX_FADE_RATE);
   uint8_t moveSpeed = map(SEGMENT.speed, 0, 255, MIN_MOVE_SPEED, MAX_MOVE_SPEED);
-  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 1.0f, 4.0f);  // Increased range
-  float minVolume = map_float(SEGMENT.custom1, 0, 255, 15.0f, 80.0f);  // Lower range
+  float sensitivity = map_float(SEGMENT.intensity, 0, 255, 1.5f, 5.0f);  // Increased range for higher sensitivity
+  float minVolume = map_float(SEGMENT.custom1, 0, 255, 10.0f, 60.0f);  // Lower range for earlier triggering
   
   // Set display mode based on custom2
   SEGENV.aux1 = (SEGMENT.custom2 < 128) ? NOTE_DISPLAY_MODE_FIXED : NOTE_DISPLAY_MODE_CIRCULAR;
@@ -163,7 +163,7 @@ uint16_t mode_note_tracker(void) {
   }
   
   // Reduced stability requirement based on sensitivity
-  int requiredCount = (sensitivity > 2.0f) ? 2 : 3;  // More sensitive = fewer matches needed
+  int requiredCount = (sensitivity > 3.0f) ? 1 : (sensitivity > 2.0f) ? 2 : 3;  // More sensitive = fewer matches needed
   if (maxCount < requiredCount) dominantNote = -1;
   
   // Update note activity with improved response
@@ -171,20 +171,24 @@ uint16_t mode_note_tracker(void) {
     if (i == dominantNote) {
       // Active note - increase intensity based on volume with more aggressive scaling
       float volumeRatio = (volume - minVolume) / (255.0f - minVolume);
-      volumeRatio = constrain(volumeRatio * sensitivity * 1.5f, 0.0f, 1.0f);  // More aggressive scaling
+      volumeRatio = constrain(volumeRatio * sensitivity * 2.0f, 0.0f, 1.0f);  // More aggressive scaling
       
-      noteActivity[i].targetIntensity = 0.4f + (volumeRatio * 0.6f);  // Higher minimum intensity
+      noteActivity[i].targetIntensity = 0.5f + (volumeRatio * 0.5f);  // Higher minimum intensity
       noteActivity[i].volume = volume;
       noteActivity[i].age++;
+      noteActivity[i].stability = min(255, noteActivity[i].stability + 2); // Faster stability gain
       
       // Faster attack for more responsiveness
-      float attack = (noteActivity[i].age < 3) ? 0.5f : 0.3f;  // Increased attack rates
+      float attack = (noteActivity[i].age < 3) ? 0.7f : 0.4f;  // Increased attack rates
       noteActivity[i].intensity += (noteActivity[i].targetIntensity - noteActivity[i].intensity) * attack;
     } else {
       // Inactive note - fade out
-      noteActivity[i].targetIntensity = 0;
+      noteActivity[i].targetIntensity *= 0.8f; // More gradual target decrease
       noteActivity[i].intensity *= fadeRate;
-      noteActivity[i].age = 0;
+      
+      // Reduce age and stability for inactive notes
+      if (noteActivity[i].age > 0) noteActivity[i].age--;
+      if (noteActivity[i].stability > 0) noteActivity[i].stability--;
       
       // Clear very dim notes
       if (noteActivity[i].intensity < 0.01f) {
@@ -211,6 +215,11 @@ uint16_t mode_note_tracker(void) {
         
         // Get color for this note
         uint8_t colorIndex = (note * 21) % 256;  // Good color separation
+        
+        // Enhance: Add stability-based hue shift for visual interest
+        uint8_t hueShift = (noteActivity[note].stability > 10) ? (noteActivity[note].stability / 8) : 0;
+        colorIndex = (colorIndex + hueShift) % 256;
+        
         uint32_t noteColor = SEGMENT.color_from_palette(colorIndex, false, PALETTE_SOLID_WRAP, 0);
         
         // Draw note with intensity gradient
@@ -219,11 +228,13 @@ uint16_t mode_note_tracker(void) {
           float distRatio = fabsf(pos - noteCenter) / (noteSectionWidth / 2.0f);
           distRatio = constrain(distRatio, 0.0f, 1.0f);
           
-          // Apply bell curve falloff
-          float falloff = exp(-3.0f * distRatio * distRatio);
+          // Apply bell curve falloff - enhanced for more visibility
+          float falloff = exp(-2.5f * distRatio * distRatio); // Less steep falloff (was -3.0f)
           
-          // Calculate final brightness
-          float brightness = noteActivity[note].intensity * falloff;
+          // Calculate final brightness with volume boost
+          float volBoost = map_float(noteActivity[note].volume, minVolume, 255, 1.0f, 1.5f);
+          float brightness = noteActivity[note].intensity * falloff * volBoost;
+          brightness = constrain(brightness, 0.0f, 1.0f);
           
           // Apply color with brightness
           uint8_t r = ((noteColor >> 16) & 0xFF) * brightness;
@@ -244,9 +255,15 @@ uint16_t mode_note_tracker(void) {
     // Circular mode - notes move around the strip
     for (int note = 0; note < MAX_NOTES; note++) {
       if (noteActivity[note].intensity > 0) {
-        // Calculate note position and width
-        int noteWidth = SEGLEN / 6;  // Narrower sections for cleaner look
-        int notePosition = (note * SEGLEN / MAX_NOTES + SEGENV.aux0) % SEGLEN;
+        // Calculate note position and width - wider for better visibility
+        int noteWidth = max(4, SEGLEN / 5);  // Wider sections for better visibility
+        
+        // Add slight randomization to position based on stability for vibration effect
+        int notePosition = (note * SEGLEN / MAX_NOTES + SEGENV.aux0);
+        if (noteActivity[note].stability > 20 && noteActivity[note].intensity > 0.6f) {
+          notePosition += (millis() % 3) - 1; // Small jitter on strong notes
+        }
+        notePosition = notePosition % SEGLEN;
         
         // Get color for this note
         uint8_t colorIndex = (note * 21) % 256;
