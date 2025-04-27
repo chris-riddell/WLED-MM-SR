@@ -1,3 +1,16 @@
+/*
+ * Dynamic Range (FX_EXP_fcn_dynamic_range.cpp)
+ * 
+ * Visualizes the dynamic range of audio by mapping volume changes to brightness 
+ * and color variations, creating flashes during dramatic volume shifts. When 
+ * significant volume changes are detected, it triggers flash effects with 
+ * intensity proportional to the change. The effect continuously adapts to the 
+ * audio's baseline volume.
+ * 
+ * Best for: Classical music, movie soundtracks, progressive rock, and other 
+ * genres with dramatic volume dynamics and crescendos.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

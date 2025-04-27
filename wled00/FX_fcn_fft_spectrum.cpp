@@ -1,3 +1,15 @@
+/*
+ * FFT Spectrum (FX_fcn_fft_spectrum.cpp)
+ * 
+ * Creates a traditional frequency spectrum analyzer visualization with weighted 
+ * distribution to show the intensity of different frequency bands (bass, mid, treble) 
+ * on different areas on the mandala.
+ * 
+ * Best for: All music types, particularly effective with complex arrangements that 
+ * have rich frequency content like orchestral music, electronic music with layered 
+ * synths, or rock with multiple instruments.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

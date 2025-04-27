@@ -1,7 +1,19 @@
 /*
-  FX_2Dfcn.cpp contains all 2D utility functions
-  Parts of the code adapted from WLED Sound Reactive: Copyright (c) 2022 Andrew Tuline, Ewoud Wijma, Harm Aldick
-*/
+ * 2D Functions (FX_2Dfcn.cpp)
+ * 
+ * Contains functions for manipulating 2D LED layouts, supporting matrix and mandala
+ * configurations with X/Y coordinate mapping. These helper functions enable effects
+ * to work with 2D layouts by providing methods for setting and getting pixel colors
+ * based on X/Y coordinates rather than just linear indices.
+ * 
+ * Key functions include:
+ * - setPixelColorXY: Set a pixel color based on X/Y coordinates
+ * - getPixelColorXY: Get a pixel color based on X/Y coordinates
+ * - blur, moveX/Y, drawCircle, fillCircle, drawLine: 2D manipulation functions
+ * 
+ * These functions are particularly important for mandala configurations and matrix displays.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "palettes.h"
@@ -661,7 +673,7 @@ void Segment::move(uint8_t dir, uint8_t delta, bool wrap) {
 void Segment::drawCircle(uint16_t cx, uint16_t cy, uint8_t radius, uint32_t col, bool soft) {
   if (!isActive() || radius == 0) return; // not active
   if (soft) {
-    // Xiaolin Wu’s algorithm
+    // Xiaolin Wu's algorithm
     int rsq = radius*radius;
     int x = 0;
     int y = radius;
@@ -690,7 +702,7 @@ void Segment::drawCircle(uint16_t cx, uint16_t cy, uint8_t radius, uint32_t col,
       x++;
     }
   } else {
-    // Bresenham’s Algorithm
+    // Bresenham's Algorithm
     int d = 3 - (2*radius);
     int y = radius, x = 0;
     while (y >= x) {
@@ -794,7 +806,7 @@ void Segment::drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint3
   }
 
   if (soft) {
-    // Xiaolin Wu’s algorithm
+    // Xiaolin Wu's algorithm
     const bool steep = dy > dx;
     if (steep) {
       // we need to go along longest dimension

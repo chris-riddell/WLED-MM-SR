@@ -1,3 +1,14 @@
+/*
+ * Noisemeter CE (FX_fcn_noisemeter_og.cpp)
+ * 
+ * Displays a classic volume meter visualization showing the amplitude of sound 
+ * in real-time, similar to traditional VU meters with color variations based on intensity.
+ * 
+ * Best for: All music types, providing a simple but effective visualization for any 
+ * audio content; particularly engaging with dynamic music that has both quiet and 
+ * loud sections.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

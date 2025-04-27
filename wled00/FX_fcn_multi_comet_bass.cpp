@@ -1,3 +1,13 @@
+/*
+ * Multi Comet Bass (FX_fcn_multi_comet_bass.cpp)
+ * 
+ * Creates bass-responsive comets that are launched in response to bass beats, 
+ * with intensity, color, and frequency controlled by bass energy.
+ * 
+ * Best for: Bass-heavy music including hip-hop, R&B, dubstep, and electronic 
+ * dance music with strong bass lines.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

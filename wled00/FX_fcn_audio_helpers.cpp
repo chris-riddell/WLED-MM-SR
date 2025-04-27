@@ -1,3 +1,19 @@
+/*
+ * Audio Helpers (FX_fcn_audio_helpers.cpp)
+ * 
+ * A collection of utility functions for audio-reactive effects. This file provides
+ * reusable algorithms for analyzing different aspects of audio data, including:
+ * 
+ * - Basic audio data validation and feature detection
+ * - Spectral analysis (calculating spectral centroid)
+ * - Bass drop detection
+ * - Musical note detection
+ * - Tonality analysis (major/minor classification)
+ * 
+ * These functions are used by various audio-reactive effects to create visuals
+ * that respond intelligently to different musical characteristics beyond just volume.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

@@ -1,3 +1,14 @@
+/*
+ * Multi Comet: 13.4 version (FX_fcn_multi_comet_134.cpp)
+ * 
+ * Generates multiple comet-like animations that move across the LED strip, triggered 
+ * by audio peaks with different colors.
+ * 
+ * Best for: Rhythmic music with distinct beats like pop, rock, hip-hop, and dance music.
+ * 
+ * This is the WLED v0.13.4 version of the effect, maintained for compatibility.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

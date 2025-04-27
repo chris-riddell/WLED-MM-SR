@@ -1,3 +1,14 @@
+/*
+ * Note Tracker (FX_EXP_fcn_note_tracker.cpp)
+ * 
+ * Detects musical notes in audio and displays them as colored segments that 
+ * persist briefly, creating patterns based on the melody and musical flow. 
+ * This effect tries to detect and visualize notes like "C", "C#", "D", "D#", etc.
+ * 
+ * Best for: Solo instrumental pieces, vocal performances, and music with clear, 
+ * distinct melodies like piano solos, flute music, or songs with prominent vocal lines.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

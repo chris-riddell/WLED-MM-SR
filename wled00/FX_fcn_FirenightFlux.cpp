@@ -1,3 +1,15 @@
+/*
+ * Firenight Flux (FX_fcn_FirenightFlux.cpp)
+ * 
+ * Creates fluid, flowing patterns that respond to changes in the sound spectrum,
+ * detecting transitions between musical sections and creating flowing patterns
+ * that change direction during shifts. Similar to Spectral Flux but with a more
+ * flowing, fire-like visual effect.
+ * 
+ * Best for: Progressive music with distinct section changes, DJ mixes with track 
+ * transitions, and songs with dramatic changes in arrangement.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

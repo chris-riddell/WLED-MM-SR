@@ -1,3 +1,20 @@
+/*
+ * Bass Drop (FX_EXP_fcn_bass_drop.cpp)
+ * 
+ * Detects bass drops in music and creates dynamic animations with different states 
+ * and intensities based on the drop's strength and buildup.
+ * 
+ * Best for: EDM, dubstep, drum and bass, trap, and other electronic music with 
+ * prominent bass drops and buildups.
+ * 
+ * Uses a state machine approach to handle different phases:
+ * - Waiting: Ambient pattern while waiting for audio cues
+ * - Buildup: Increasing intensity as a buildup is detected
+ * - Drop: Maximum animation intensity during the bass drop
+ * - Recovery: Gradual transition back to normal after the drop
+ * - Calm: Brief settling period before returning to waiting state
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

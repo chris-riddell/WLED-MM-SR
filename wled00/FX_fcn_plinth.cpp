@@ -1,3 +1,15 @@
+/*
+ * Plinth (FX_fcn_plinth.cpp)
+ * 
+ * A special non-audio effect optimized for dual strips of different lengths on one pin,
+ * allowing smooth color cycling that repeats properly on shorter segments while extending
+ * to longer ones. Designed for specific hardware configurations where strips of different
+ * lengths need to display coordinated patterns.
+ * 
+ * For installations that have a "plinth" or base component with a specific LED layout
+ * that differs from the main mandala configuration.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

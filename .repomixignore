@@ -1,0 +1,17 @@
+tools
+usermods
+wled00/data
+wled00/src
+wled_presets.json
+test
+pio-scripts
+images
+boards
+.vscode
+.devcontainer
+.github
+.repomix
+.envrc
+.cursor
+
+memory-bank

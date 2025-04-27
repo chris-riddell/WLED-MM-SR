@@ -1,3 +1,26 @@
+/*
+ * Harmonic Viz (FX_EXP_fcn_harmonic_viz.cpp)
+ * 
+ * Analyzes the emotional quality (major/minor tonality) of music and translates 
+ * it into distinct visual patterns with corresponding color schemes - bright 
+ * expansive patterns for happy (major) music and deeper, edge-focused patterns 
+ * for moody (minor) music. 
+ * 
+ * The detection works by analyzing the FFT distribution where high frequency 
+ * indicates major keys and low is minor keys. Brightness is distributed to 
+ * emphasize the center for major keys and the edges for minor keys. Uses 
+ * sine/cosine waves where frequency and amplitude are modulated by the detected 
+ * tone, creating a visualization that "feels" like the emotional quality of 
+ * the music.
+ * 
+ * Note: The effect doesn't override your chosen palette, but rather manipulates 
+ * the hue position, saturation, and brightness to express the emotional quality 
+ * of the music.
+ * 
+ * Best for: Classical, jazz, folk, and pop music with clear tonality and 
+ * emotional shifts between major and minor sections.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

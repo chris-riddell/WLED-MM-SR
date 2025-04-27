@@ -1,3 +1,23 @@
+/*
+ * Spectral Centroid (FX_EXP_fcn_spectral_centroid.cpp)
+ * 
+ * Maps the spectral "brightness" of sound (bass vs. treble balance) to different 
+ * color temperatures and patterns—cool colors for bass-heavy audio and warm colors 
+ * for treble-heavy sounds. 
+ * 
+ * The effect uses the average of all FFT bins which are assigned to different 
+ * positions on the strip to determine where the "center of mass" of the sound lies. 
+ * This value is found to be bass-heavy or treble-heavy and mapped to a color 
+ * temperature spectrum (cool/blue for bass, warm/orange for treble). 
+ * 
+ * For circular displays, it creates distinct brightness patterns - brightening 
+ * the center for bass-heavy audio and the outer edges for treble-heavy content.
+ * 
+ * Best for: Music with contrasting sections of bass and treble content, like 
+ * electronic music that alternates between bass drops and high synth sections, 
+ * or orchestral pieces with contrasting instrumental sections.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

@@ -1,3 +1,19 @@
+/*
+ * Spectral Flux (FX_EXP_fcn_spectral_flux.cpp)
+ * 
+ * Visualizes changes in the sound spectrum over time, detecting transitions 
+ * between musical sections and creating flowing patterns that change direction 
+ * during shifts in musical sections. 
+ * 
+ * It measures how quickly the audio spectrum is changing by calculating the sum 
+ * of positive differences between consecutive FFT frames. Significant flux events 
+ * are detected when recent flux exceeds a threshold, with a minimum wait time 
+ * between direction changes.
+ * 
+ * Best for: Progressive music with distinct section changes, DJ mixes with track 
+ * transitions, and songs with bridge sections or dramatic changes in arrangement.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"

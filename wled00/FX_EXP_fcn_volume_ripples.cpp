@@ -1,3 +1,14 @@
+/*
+ * Volume Ripples (FX_EXP_fcn_volume_ripples.cpp)
+ * 
+ * Creates outward-expanding ripples from the center when volume peaks are detected, 
+ * with ripple properties (size, brightness, color) tied to the intensity of the 
+ * volume peaks.
+ * 
+ * Best for: Percussive music with clear transients like drums, piano with staccato 
+ * playing, or any music with distinct and separated notes or beats.
+ */
+
 #include "wled.h"
 #include "FX.h"
 #include "fcn_declare.h"
